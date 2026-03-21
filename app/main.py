@@ -43,6 +43,26 @@ def create_task(
     status: str = Body("未着手"),
     note: str = Body("")
 ):
+    @app.get("/properties")
+def get_properties():
+    res = (
+        supabase.table("properties")
+        .select("*")
+        .order("sort_order")
+        .order("property_name")
+        .execute()
+    )
+    return res.data
+    @app.get("/rooms")
+def get_rooms(property_id: str | None = None):
+    query = supabase.table("rooms").select("*").order("room_sort_order").order("room_name")
+
+    if property_id:
+        query = query.eq("property_id", property_id)
+
+    res = query.execute()
+    return res.data
+    
     payload = {
         "property_name": property_name,
         "room_name": room_name,
