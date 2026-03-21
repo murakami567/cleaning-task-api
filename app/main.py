@@ -1,5 +1,5 @@
 from datetime import date
-from fastapi import FastAPI
+from fastapi import FastAPI, Body, HTTPException
 from app.db import supabase
 
 app = FastAPI()
