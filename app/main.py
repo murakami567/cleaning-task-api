@@ -20,3 +20,35 @@ def get_today_tasks():
     )
 
     return res.data
+from fastapi import Body, HTTPException
+
+@app.post("/tasks/create")
+def create_task(
+    property_name: str = Body(...),
+    room_name: str = Body(...),
+    room_key: str = Body(...),
+    task_date: str = Body(...),
+    status: str = Body("未着手"),
+    note: str = Body("")
+):
+    payload = {
+        "property_name": property_name,
+        "room_name": room_name,
+        "room_key": room_key,
+        "task_date": task_date,
+        "checkout_date": task_date,
+        "next_checkin_date": None,
+        "gap_nights": 0,
+        "guest_count": 0,
+        "load_score": 0,
+        "status": status,
+        "note": note,
+        "source": "manual"
+    }
+
+    res = supabase.table("cleaning_tasks").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="task creation failed")
+
+    return res.data[0]
