@@ -164,7 +164,7 @@ def create_room(
 
     return res.data[0]
 
-    @app.get("/properties")
+@app.get("/properties")
 def get_properties():
     res = (
         supabase.table("properties")
@@ -244,9 +244,3 @@ def create_room(
         raise HTTPException(status_code=500, detail="room creation failed")
 
     return res.data[0]
-
-    
-
-    res = query.execute()
-
-    return res.data
