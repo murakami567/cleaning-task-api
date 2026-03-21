@@ -2,6 +2,7 @@ from datetime import date
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.db import supabase
+
 app = FastAPI()
 
 app.add_middleware(
@@ -16,10 +17,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# -----------------------------
+# root
+# -----------------------------
 @app.get("/")
 def root():
     return {"status": "ok"}
 
+
+# -----------------------------
+# 今日のタスク取得
+# -----------------------------
 @app.get("/tasks/today")
 def get_today_tasks():
     today = date.today().isoformat()
@@ -32,8 +41,11 @@ def get_today_tasks():
     )
 
     return res.data
-from fastapi import Body, HTTPException
 
+
+# -----------------------------
+# 清掃タスク作成
+# -----------------------------
 @app.post("/tasks/create")
 def create_task(
     property_name: str = Body(...),
@@ -43,26 +55,7 @@ def create_task(
     status: str = Body("未着手"),
     note: str = Body("")
 ):
-    @app.get("/properties")
-def get_properties():
-    res = (
-        supabase.table("properties")
-        .select("*")
-        .order("sort_order")
-        .order("property_name")
-        .execute()
-    )
-    return res.data
-    @app.get("/rooms")
-def get_rooms(property_id: str | None = None):
-    query = supabase.table("rooms").select("*").order("room_sort_order").order("room_name")
 
-    if property_id:
-        query = query.eq("property_id", property_id)
-
-    res = query.execute()
-    return res.data
-    
     payload = {
         "property_name": property_name,
         "room_name": room_name,
@@ -84,3 +77,41 @@ def get_rooms(property_id: str | None = None):
         raise HTTPException(status_code=500, detail="task creation failed")
 
     return res.data[0]
+
+
+# -----------------------------
+# 物件一覧
+# -----------------------------
+@app.get("/properties")
+def get_properties():
+
+    res = (
+        supabase.table("properties")
+        .select("*")
+        .order("sort_order")
+        .order("property_name")
+        .execute()
+    )
+
+    return res.data
+
+
+# -----------------------------
+# 部屋一覧
+# -----------------------------
+@app.get("/rooms")
+def get_rooms(property_id: str | None = None):
+
+    query = (
+        supabase.table("rooms")
+        .select("*")
+        .order("room_sort_order")
+        .order("room_name")
+    )
+
+    if property_id:
+        query = query.eq("property_id", property_id)
+
+    res = query.execute()
+
+    return res.data
