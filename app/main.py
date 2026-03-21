@@ -18,9 +18,6 @@ app.add_middleware(
 )
 
 
-# -----------------------------
-# root
-# -----------------------------
 @app.get("/")
 def root():
     return {"status": "ok"}
@@ -112,86 +109,13 @@ def get_rooms(property_id: str | None = None):
     if property_id:
         query = query.eq("property_id", property_id)
 
-    @app.post("/properties/create")
-def create_property(
-    property_code: str = Body(...),
-    property_name: str = Body(...),
-    normalized_name: str = Body(""),
-    sort_order: int = Body(999),
-    is_active: bool = Body(True),
-):
-    payload = {
-        "property_code": property_code,
-        "property_name": property_name,
-        "normalized_name": normalized_name if normalized_name else property_name,
-        "sort_order": sort_order,
-        "is_active": is_active,
-    }
-
-    res = supabase.table("properties").insert(payload).execute()
-
-    if not res.data:
-        raise HTTPException(status_code=500, detail="property creation failed")
-
-    return res.data[0]
-
-    @app.post("/rooms/create")
-def create_room(
-    property_id: str = Body(...),
-    room_name: str = Body(...),
-    room_code: str = Body(""),
-    room_key: str = Body(...),
-    normalized_room_key: str = Body(""),
-    capacity: int = Body(1),
-    room_sort_order: int = Body(999),
-    is_active: bool = Body(True),
-):
-    payload = {
-        "property_id": property_id,
-        "room_name": room_name,
-        "room_code": room_code if room_code else room_name,
-        "room_key": room_key,
-        "normalized_room_key": normalized_room_key if normalized_room_key else room_key,
-        "capacity": capacity,
-        "room_sort_order": room_sort_order,
-        "is_active": is_active,
-    }
-
-    res = supabase.table("rooms").insert(payload).execute()
-
-    if not res.data:
-        raise HTTPException(status_code=500, detail="room creation failed")
-
-    return res.data[0]
-
-@app.get("/properties")
-def get_properties():
-    res = (
-        supabase.table("properties")
-        .select("*")
-        .order("sort_order")
-        .order("property_name")
-        .execute()
-    )
-    return res.data
-
-
-@app.get("/rooms")
-def get_rooms(property_id: str | None = None):
-    query = (
-        supabase.table("rooms")
-        .select("*")
-        .order("room_sort_order")
-        .order("room_name")
-    )
-
-    if property_id:
-        query = query.eq("property_id", property_id)
-
     res = query.execute()
     return res.data
 
 
+# -----------------------------
+# 物件追加
+# -----------------------------
 @app.post("/properties/create")
 def create_property(
     property_code: str = Body(...),
@@ -200,6 +124,7 @@ def create_property(
     sort_order: int = Body(999),
     is_active: bool = Body(True),
 ):
+
     payload = {
         "property_code": property_code,
         "property_name": property_name,
@@ -216,6 +141,9 @@ def create_property(
     return res.data[0]
 
 
+# -----------------------------
+# 部屋追加
+# -----------------------------
 @app.post("/rooms/create")
 def create_room(
     property_id: str = Body(...),
@@ -227,6 +155,7 @@ def create_room(
     room_sort_order: int = Body(999),
     is_active: bool = Body(True),
 ):
+
     payload = {
         "property_id": property_id,
         "room_name": room_name,
