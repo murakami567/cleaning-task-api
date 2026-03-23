@@ -408,3 +408,102 @@ def update_facility(
         raise HTTPException(status_code=500, detail="facility update failed")
 
     return res.data[0]
+# -----------------------------
+# スタッフ
+# -----------------------------
+@app.get("/staffs")
+def get_staffs():
+    res = (
+        supabase.table("staff_members")
+        .select("*")
+        .order("sort_order")
+        .order("staff_name")
+        .execute()
+    )
+    return res.data
+
+
+# -----------------------------
+# シフト日一覧
+# -----------------------------
+@app.get("/shifts")
+def get_shifts(shift_date: str | None = None):
+    query = (
+        supabase.table("shift_days")
+        .select("*, shift_entries(*, staff_members(*))")
+        .order("shift_date")
+    )
+
+    if shift_date:
+        query = query.eq("shift_date", shift_date)
+
+    res = query.execute()
+    return res.data
+
+
+# -----------------------------
+# シフト日作成
+# -----------------------------
+@app.post("/shifts/create_day")
+def create_shift_day(
+    shift_date: str = Body(...),
+    note: str = Body("")
+):
+    payload = {
+        "shift_date": shift_date,
+        "note": note,
+    }
+
+    res = supabase.table("shift_days").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="shift day creation failed")
+
+    return res.data[0]
+
+
+# -----------------------------
+# シフト明細 upsert
+# -----------------------------
+@app.post("/shifts/upsert_entry")
+def upsert_shift_entry(
+    shift_day_id: str = Body(...),
+    staff_id: str = Body(...),
+    status: str = Body("出勤"),
+    start_time: str | None = Body(None),
+    end_time: str | None = Body(None),
+    assigned_area: str = Body(""),
+    note: str = Body(""),
+):
+    existing = (
+        supabase.table("shift_entries")
+        .select("*")
+        .eq("shift_day_id", shift_day_id)
+        .eq("staff_id", staff_id)
+        .execute()
+    )
+
+    payload = {
+        "shift_day_id": shift_day_id,
+        "staff_id": staff_id,
+        "status": status,
+        "start_time": start_time,
+        "end_time": end_time,
+        "assigned_area": assigned_area,
+        "note": note,
+    }
+
+    if existing.data:
+        res = (
+            supabase.table("shift_entries")
+            .update(payload)
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        res = supabase.table("shift_entries").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="shift entry upsert failed")
+
+    return res.data[0]
