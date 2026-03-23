@@ -238,3 +238,173 @@ def update_room(
         raise HTTPException(status_code=500, detail="room update failed")
 
     return res.data[0]
+# -----------------------------
+# 新規オープン進捗
+# -----------------------------
+@app.get("/openings")
+def get_openings():
+    res = (
+        supabase.table("opening_projects")
+        .select("*")
+        .order("due_date")
+        .execute()
+    )
+    return res.data
+
+
+@app.post("/openings/create")
+def create_opening(
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    room_name: str = Body(""),
+    title: str = Body(...),
+    owner_name: str = Body(""),
+    due_date: str | None = Body(None),
+    status: str = Body("未着手"),
+    priority: str = Body("中"),
+    progress: int = Body(0),
+    memo: str = Body(""),
+):
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "room_name": room_name,
+        "title": title,
+        "owner_name": owner_name,
+        "due_date": due_date,
+        "status": status,
+        "priority": priority,
+        "progress": progress,
+        "memo": memo,
+    }
+
+    res = supabase.table("opening_projects").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="opening creation failed")
+
+    return res.data[0]
+
+
+@app.post("/openings/update")
+def update_opening(
+    opening_id: str = Body(...),
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    room_name: str = Body(""),
+    title: str = Body(...),
+    owner_name: str = Body(""),
+    due_date: str | None = Body(None),
+    status: str = Body("未着手"),
+    priority: str = Body("中"),
+    progress: int = Body(0),
+    memo: str = Body(""),
+):
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "room_name": room_name,
+        "title": title,
+        "owner_name": owner_name,
+        "due_date": due_date,
+        "status": status,
+        "priority": priority,
+        "progress": progress,
+        "memo": memo,
+    }
+
+    res = (
+        supabase.table("opening_projects")
+        .update(payload)
+        .eq("id", opening_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="opening update failed")
+
+    return res.data[0]
+
+
+# -----------------------------
+# 設備管理
+# -----------------------------
+@app.get("/facilities")
+def get_facilities():
+    res = (
+        supabase.table("facility_tasks")
+        .select("*")
+        .order("start_date")
+        .execute()
+    )
+    return res.data
+
+
+@app.post("/facilities/create")
+def create_facility(
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    room_name: str = Body(""),
+    assignee: str = Body(""),
+    content: str = Body(...),
+    start_date: str | None = Body(None),
+    end_date: str | None = Body(None),
+    status: str = Body("未着手"),
+    note: str = Body(""),
+):
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "room_name": room_name,
+        "assignee": assignee,
+        "content": content,
+        "start_date": start_date,
+        "end_date": end_date,
+        "status": status,
+        "note": note,
+    }
+
+    res = supabase.table("facility_tasks").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="facility creation failed")
+
+    return res.data[0]
+
+
+@app.post("/facilities/update")
+def update_facility(
+    facility_id: str = Body(...),
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    room_name: str = Body(""),
+    assignee: str = Body(""),
+    content: str = Body(...),
+    start_date: str | None = Body(None),
+    end_date: str | None = Body(None),
+    status: str = Body("未着手"),
+    note: str = Body(""),
+):
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "room_name": room_name,
+        "assignee": assignee,
+        "content": content,
+        "start_date": start_date,
+        "end_date": end_date,
+        "status": status,
+        "note": note,
+    }
+
+    res = (
+        supabase.table("facility_tasks")
+        .update(payload)
+        .eq("id", facility_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="facility update failed")
+
+    return res.data[0]
