@@ -507,3 +507,71 @@ def upsert_shift_entry(
         raise HTTPException(status_code=500, detail="shift entry upsert failed")
 
     return res.data[0]
+from datetime import datetime
+from calendar import monthrange
+
+
+# -----------------------------
+# 月間シフト表取得
+# -----------------------------
+@app.get("/shift-board")
+def get_shift_board(year: int, month: int):
+    start_date = f"{year}-{month:02d}-01"
+    last_day = monthrange(year, month)[1]
+    end_date = f"{year}-{month:02d}-{last_day:02d}"
+
+    staffs_res = (
+        supabase.table("staff_members")
+        .select("*")
+        .eq("is_active", True)
+        .order("sort_order")
+        .order("staff_name")
+        .execute()
+    )
+
+    shift_days_res = (
+        supabase.table("shift_days")
+        .select("*, shift_entries(*)")
+        .gte("shift_date", start_date)
+        .lte("shift_date", end_date)
+        .order("shift_date")
+        .execute()
+    )
+
+    return {
+        "staffs": staffs_res.data,
+        "days": shift_days_res.data,
+    }
+
+
+# -----------------------------
+# シフト日を取得 or 作成
+# -----------------------------
+@app.post("/shifts/get_or_create_day")
+def get_or_create_shift_day(
+    shift_date: str = Body(...),
+    note: str = Body("")
+):
+    existing = (
+        supabase.table("shift_days")
+        .select("*")
+        .eq("shift_date", shift_date)
+        .execute()
+    )
+
+    if existing.data:
+        return existing.data[0]
+
+    created = (
+        supabase.table("shift_days")
+        .insert({
+            "shift_date": shift_date,
+            "note": note,
+        })
+        .execute()
+    )
+
+    if not created.data:
+        raise HTTPException(status_code=500, detail="shift day create failed")
+
+    return created.data[0]
