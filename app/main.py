@@ -750,6 +750,14 @@ def extract_booking_fields(b: dict):
     )
 
     status_raw = str(b.get("status") or "")
+
+    title_raw = str(
+        b.get("title")
+        or b.get("Title")
+        or b.get("invoiceItemName")
+        or ""
+    )
+
     guest_count = int(b.get("numAdult", 0) or 0) + int(b.get("numChild", 0) or 0)
 
     return {
@@ -759,6 +767,7 @@ def extract_booking_fields(b: dict):
         "checkin": checkin,
         "checkout": checkout,
         "status_raw": status_raw,
+        "title_raw": title_raw,
         "guest_count": guest_count,
     }
 
@@ -815,6 +824,7 @@ def beds24_sync_bookings(
             checkin = extracted["checkin"]
             checkout = extracted["checkout"]
             status_raw = extracted["status_raw"]
+            title_raw = extracted["title_raw"]
             guest_count = extracted["guest_count"]
 
             # 1. 生データ保存
@@ -840,7 +850,15 @@ def beds24_sync_bookings(
             room_name_normalized = normalize_room_name(room_name_raw)
             room_key = f"{property_name_normalized}{room_name_normalized}"
 
-            is_cancelled = "cancel" in status_raw.lower()
+            status_lower = status_raw.lower()
+            title_lower = title_raw.lower()
+
+            is_cancelled = "cancel" in status_lower
+            is_blocked = (
+                "block" in title_lower
+                or "blocked" in title_lower
+                or "ブロック" in title_raw
+            )
 
             # 2. 加工データ保存
             processed_payload = {
@@ -854,7 +872,9 @@ def beds24_sync_bookings(
                 "checkout_date": checkout[:10] if checkout else None,
                 "guest_count": guest_count,
                 "status_raw": status_raw,
+                "title_raw": title_raw,
                 "is_cancelled": is_cancelled,
+                "is_blocked": is_blocked,
             }
 
             processed_res = (
@@ -868,11 +888,19 @@ def beds24_sync_bookings(
                 "processed_count": len(processed_res.data or []),
             })
 
-            # キャンセルは cleaning_tasks へ入れない
+            # キャンセル・ブロックは清掃タスクに入れない
             if is_cancelled:
                 skipped.append({
                     "reason": "cancelled",
                     "booking_id": booking_id,
+                })
+                continue
+
+            if is_blocked:
+                skipped.append({
+                    "reason": "blocked_by_title",
+                    "booking_id": booking_id,
+                    "title_raw": title_raw,
                 })
                 continue
 
