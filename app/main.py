@@ -804,7 +804,10 @@ def beds24_csv_sync(
     to_date: str | None = Body(None),
 ):
     if not BEDS24_CSV_USERNAME or not BEDS24_CSV_PASSWORD:
-        raise HTTPException(status_code=500, detail="BEDS24_CSV_USERNAME or BEDS24_CSV_PASSWORD is not set")
+        raise HTTPException(
+            status_code=500,
+            detail="BEDS24_CSV_USERNAME or BEDS24_CSV_PASSWORD is not set"
+        )
 
     today = date.today()
 
@@ -827,13 +830,20 @@ def beds24_csv_sync(
         "dateto": end_date_str,
     }
 
-    res = requests.post(BEDS24_CSV_URL, data=payload, timeout=60)
+    try:
+        res = requests.post(BEDS24_CSV_URL, data=payload, timeout=60)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Beds24 CSV request failed: {str(e)}")
 
     if res.status_code != 200:
         raise HTTPException(status_code=res.status_code, detail=res.text)
 
     csv_text = res.text
-    csv_rows = parse_csv_text(csv_text)
+
+    try:
+        csv_rows = parse_csv_text(csv_text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"CSV parse failed: {str(e)}")
 
     if not csv_rows or len(csv_rows) == 0:
         return {
@@ -847,7 +857,11 @@ def beds24_csv_sync(
         }
 
     header_row = csv_rows[0]
-    target_columns = find_target_columns(header_row)
+
+    try:
+        target_columns = find_target_columns(header_row)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"CSV header check failed: {str(e)}")
 
     raw_saved = []
     processed_saved = []
@@ -857,22 +871,25 @@ def beds24_csv_sync(
     for i in range(1, len(csv_rows)):
         row = csv_rows[i]
 
-        title = safe_get(row, target_columns["Title"])
-        status = safe_get(row, target_columns["Status"])
-        property_name_raw = safe_get(row, target_columns["Property"])
-        unit_raw = safe_get(row, target_columns["Unit"])
-        full_name = safe_get(row, target_columns["Full Name"])
-        first_night = safe_get(row, target_columns["FirstNight"])
-        check_out = safe_get(row, target_columns["CheckOut"])
-        price = safe_get(row, target_columns["Price"])
-        referer = safe_get(row, target_columns["Referer"])
-        adult_raw = safe_get(row, target_columns["Adult"])
-        child_raw = safe_get(row, target_columns["Child"])
-        time_entered = safe_get(row, target_columns["Time Entered"])
-
-        raw_booking_id = f"{property_name_raw}_{unit_raw}_{first_night}_{check_out}_{i}"
-
         try:
+            title = safe_get(row, target_columns["Title"])
+            status = safe_get(row, target_columns["Status"])
+            property_name_raw = safe_get(row, target_columns["Property"])
+            unit_raw = safe_get(row, target_columns["Unit"])
+            full_name = safe_get(row, target_columns["Full Name"])
+            first_night = safe_get(row, target_columns["FirstNight"])
+            check_out = safe_get(row, target_columns["CheckOut"])
+            price = safe_get(row, target_columns["Price"])
+            referer = safe_get(row, target_columns["Referer"])
+            adult_raw = safe_get(row, target_columns["Adult"])
+            child_raw = safe_get(row, target_columns["Child"])
+            time_entered = safe_get(row, target_columns["Time Entered"])
+
+            raw_booking_id = f"{property_name_raw}_{unit_raw}_{first_night}_{check_out}_{i}"
+
+            # -----------------------------
+            # 1. raw保存
+            # -----------------------------
             raw_payload = {
                 "booking_id": raw_booking_id,
                 "raw_json": {
@@ -891,167 +908,194 @@ def beds24_csv_sync(
                 },
             }
 
-            raw_res = supabase.table("beds24_raw_bookings").insert(raw_payload).execute()
-            raw_saved.append({
-                "booking_id": raw_booking_id,
-                "raw_count": len(raw_res.data or []),
-            })
-        except Exception as e:
-            skipped.append({
-                "reason": f"raw save error: {str(e)}",
-                "booking_id": raw_booking_id,
-            })
-            continue
-
-        if status == "Cancelled":
-            skipped.append({
-                "reason": "cancelled",
-                "booking_id": raw_booking_id,
-            })
-            continue
-
-        if "ブロック" in title:
-            skipped.append({
-                "reason": "blocked_by_title",
-                "booking_id": raw_booking_id,
-            })
-            continue
-
-        if "予備部屋" in title:
-            skipped.append({
-                "reason": "reserve_room_by_title",
-                "booking_id": raw_booking_id,
-            })
-            continue
-
-        property_name_normalized = normalize_property_name_csv(property_name_raw)
-        unit_normalized = str(unit_raw).strip()
-
-        if any(ch.isdigit() for ch in property_name_raw):
-            unit_normalized = "".join([c for c in unit_normalized if not c.isdigit()])
-
-        property_unit_key = f"{property_name_raw}{unit_normalized}"
-        room_key = f"{property_name_normalized}{unit_normalized}"
-
-        try:
-            adult_count = int(adult_raw or 0)
-        except Exception:
-            adult_count = 0
-
-        try:
-            child_count = int(child_raw or 0)
-        except Exception:
-            child_count = 0
-
-        guest_count = adult_count + child_count
-
-        processed_payload = {
-            "booking_id": raw_booking_id,
-            "full_name": full_name,
-            "title_raw": title,
-            "property_name_raw": property_name_raw,
-            "property_name_normalized": property_name_normalized,
-            "room_name_raw": unit_raw,
-            "room_name_normalized": unit_normalized,
-            "room_key": room_key,
-            "checkin_date": first_night if first_night else None,
-            "checkout_date": check_out if check_out else None,
-            "price": price,
-            "status_raw": status,
-            "referer": referer,
-            "adult_count": adult_count,
-            "child_count": child_count,
-            "guest_count": guest_count,
-            "time_entered": time_entered,
-            "property_unit_key": property_unit_key,
-            "is_cancelled": False,
-            "is_blocked": False,
-        }
-
-        try:
-            processed_res = (
-                supabase.table("beds24_processed_bookings")
-                .upsert(processed_payload, on_conflict="booking_id")
-                .execute()
-            )
-
-            processed_saved.append({
-                "booking_id": raw_booking_id,
-                "processed_count": len(processed_res.data or []),
-            })
-        except Exception as e:
-            skipped.append({
-                "reason": f"processed save error: {str(e)}",
-                "booking_id": raw_booking_id,
-            })
-            continue
-
-        if not check_out:
-            skipped.append({
-                "reason": "missing checkout",
-                "booking_id": raw_booking_id,
-            })
-            continue
-
-        task_date = check_out
-        checkout_date = check_out
-        next_checkin_date = first_night if first_night else None
-
-        gap_nights = 0
-        if first_night and check_out:
             try:
-                co = datetime.fromisoformat(check_out[:10])
-                ci = datetime.fromisoformat(first_night[:10])
-                gap_nights = max((ci - co).days, 0)
+                raw_res = (
+                    supabase.table("beds24_raw_bookings")
+                    .insert(raw_payload)
+                    .execute()
+                )
+                raw_saved.append({
+                    "booking_id": raw_booking_id,
+                    "raw_count": len(raw_res.data or []),
+                })
+            except Exception as e:
+                skipped.append({
+                    "reason": f"raw save error: {str(e)}",
+                    "booking_id": raw_booking_id,
+                })
+                continue
+
+            # -----------------------------
+            # 2. 除外判定（GAS準拠）
+            # -----------------------------
+            if status == "Cancelled":
+                skipped.append({
+                    "reason": "cancelled",
+                    "booking_id": raw_booking_id,
+                })
+                continue
+
+            if "ブロック" in title:
+                skipped.append({
+                    "reason": "blocked_by_title",
+                    "booking_id": raw_booking_id,
+                })
+                continue
+
+            if "予備部屋" in title:
+                skipped.append({
+                    "reason": "reserve_room_by_title",
+                    "booking_id": raw_booking_id,
+                })
+                continue
+
+            # -----------------------------
+            # 3. 加工
+            # -----------------------------
+            property_name_normalized = normalize_property_name_csv(property_name_raw)
+            unit_normalized = str(unit_raw).strip()
+
+            # GAS準拠：propertyに数字が含まれる場合はunitから数字を除去
+            if any(ch.isdigit() for ch in str(property_name_raw)):
+                unit_normalized = "".join([c for c in unit_normalized if not c.isdigit()])
+
+            property_unit_key = f"{property_name_raw}{unit_normalized}"
+            room_key = f"{property_name_normalized}{unit_normalized}"
+
+            try:
+                adult_count = int(adult_raw or 0)
             except Exception:
-                gap_nights = 0
+                adult_count = 0
 
-        load_score = calc_load_score(guest_count, gap_nights)
+            try:
+                child_count = int(child_raw or 0)
+            except Exception:
+                child_count = 0
 
-        cleaning_payload = {
-            "reservation_id": raw_booking_id,
-            "property_name": property_name_normalized,
-            "room_name": unit_normalized,
-            "room_key": room_key,
-            "task_date": task_date,
-            "checkout_date": checkout_date,
-            "next_checkin_date": next_checkin_date,
-            "gap_nights": gap_nights,
-            "guest_count": guest_count,
-            "load_score": load_score,
-            "status": "未着手",
-            "note": "",
-            "source": "beds24_csv",
-        }
+            guest_count = adult_count + child_count
 
-        try:
-            cleaning_res = (
-                supabase.table("cleaning_tasks")
-                .upsert(cleaning_payload, on_conflict="reservation_id")
-                .execute()
-            )
-
-            cleaning_saved.append({
+            processed_payload = {
                 "booking_id": raw_booking_id,
+                "full_name": full_name,
+                "title_raw": title,
+                "property_name_raw": property_name_raw,
+                "property_name_normalized": property_name_normalized,
+                "room_name_raw": unit_raw,
+                "room_name_normalized": unit_normalized,
+                "room_key": room_key,
+                "checkin_date": first_night if first_night else None,
+                "checkout_date": check_out if check_out else None,
+                "price": price,
+                "status_raw": status,
+                "referer": referer,
+                "adult_count": adult_count,
+                "child_count": child_count,
+                "guest_count": guest_count,
+                "time_entered": time_entered,
+                "property_unit_key": property_unit_key,
+                "is_cancelled": False,
+                "is_blocked": False,
+            }
+
+            # -----------------------------
+            # 4. processed保存
+            # -----------------------------
+            try:
+                processed_res = (
+                    supabase.table("beds24_processed_bookings")
+                    .upsert(processed_payload, on_conflict="booking_id")
+                    .execute()
+                )
+                processed_saved.append({
+                    "booking_id": raw_booking_id,
+                    "processed_count": len(processed_res.data or []),
+                })
+            except Exception as e:
+                skipped.append({
+                    "reason": f"processed save error: {str(e)}",
+                    "booking_id": raw_booking_id,
+                    "payload": processed_payload,
+                })
+                continue
+
+            # -----------------------------
+            # 5. cleaning_tasks生成
+            # -----------------------------
+            if not check_out:
+                skipped.append({
+                    "reason": "missing checkout",
+                    "booking_id": raw_booking_id,
+                })
+                continue
+
+            task_date = check_out[:10]
+            checkout_date = check_out[:10]
+            next_checkin_date = first_night[:10] if first_night else None
+
+            gap_nights = 0
+            if first_night and check_out:
+                try:
+                    co = datetime.fromisoformat(check_out[:10])
+                    ci = datetime.fromisoformat(first_night[:10])
+                    gap_nights = max((ci - co).days, 0)
+                except Exception:
+                    gap_nights = 0
+
+            load_score = calc_load_score(guest_count, gap_nights)
+
+            cleaning_payload = {
+                "reservation_id": raw_booking_id,
+                "property_name": property_name_normalized,
+                "room_name": unit_normalized,
                 "room_key": room_key,
                 "task_date": task_date,
-                "cleaning_count": len(cleaning_res.data or []),
-            })
+                "checkout_date": checkout_date,
+                "next_checkin_date": next_checkin_date,
+                "gap_nights": gap_nights,
+                "guest_count": guest_count,
+                "load_score": load_score,
+                "status": "未着手",
+                "note": "",
+                "source": "beds24_csv",
+            }
+
+            try:
+                cleaning_res = (
+                    supabase.table("cleaning_tasks")
+                    .upsert(cleaning_payload, on_conflict="reservation_id")
+                    .execute()
+                )
+                cleaning_saved.append({
+                    "booking_id": raw_booking_id,
+                    "room_key": room_key,
+                    "task_date": task_date,
+                    "cleaning_count": len(cleaning_res.data or []),
+                })
+            except Exception as e:
+                skipped.append({
+                    "reason": f"cleaning save error: {str(e)}",
+                    "booking_id": raw_booking_id,
+                    "payload": cleaning_payload,
+                })
+                continue
+
         except Exception as e:
             skipped.append({
-                "reason": f"cleaning save error: {str(e)}",
-                "booking_id": raw_booking_id,
+                "reason": f"row process error: {str(e)}",
+                "row_index": i,
+                "row_head": row[:12],
             })
 
     return {
         "from": start_date_str,
         "to": end_date_str,
+        "csv_row_count": len(csv_rows) - 1,
         "raw_saved_count": len(raw_saved),
         "processed_saved_count": len(processed_saved),
         "cleaning_saved_count": len(cleaning_saved),
         "skipped_count": len(skipped),
-        "raw_saved": raw_saved,
-        "processed_saved": processed_saved,
-        "cleaning_saved": cleaning_saved,
-        "skipped": skipped,
+        "raw_saved": raw_saved[:20],
+        "processed_saved": processed_saved[:20],
+        "cleaning_saved": cleaning_saved[:20],
+        "skipped": skipped[:50],
     }
