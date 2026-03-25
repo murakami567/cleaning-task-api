@@ -711,12 +711,10 @@ def normalize_room_name(name: str) -> str:
 
 def calc_load_score(guest_count: int, gap_nights: int) -> int:
     score = guest_count or 0
-
     if gap_nights == 0:
         score += 2
     elif gap_nights == 1:
         score += 1
-
     return score
 
 
@@ -786,7 +784,10 @@ def beds24_bookings_test():
         raise HTTPException(status_code=res.status_code, detail=res.text)
 
     beds_json = res.json()
-    return beds_json.get("data", [])
+    return {
+        "keys": list(beds_json.keys()) if isinstance(beds_json, dict) else [],
+        "sample": beds_json.get("data", [])[:3] if isinstance(beds_json, dict) else beds_json[:3],
+    }
 
 
 @app.post("/beds24/sync")
@@ -829,7 +830,6 @@ def beds24_sync_bookings(
             title_raw = extracted["title_raw"]
             guest_count = extracted["guest_count"]
 
-            # 1. 生データ保存
             raw_payload = {
                 "booking_id": booking_id,
                 "raw_json": b,
@@ -862,7 +862,6 @@ def beds24_sync_bookings(
                 or "ブロック" in title_raw
             )
 
-            # 2. 加工データ保存
             processed_payload = {
                 "booking_id": booking_id,
                 "property_name_raw": property_name_raw,
@@ -890,7 +889,6 @@ def beds24_sync_bookings(
                 "processed_count": len(processed_res.data or []),
             })
 
-            # キャンセル・ブロックは清掃タスクに入れない
             if is_cancelled:
                 skipped.append({
                     "reason": "cancelled",
@@ -921,7 +919,6 @@ def beds24_sync_bookings(
 
             load_score = calc_load_score(guest_count, gap_nights)
 
-            # 3. 清掃タスク保存
             cleaning_payload = {
                 "reservation_id": booking_id,
                 "property_name": property_name_normalized,
