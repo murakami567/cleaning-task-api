@@ -663,10 +663,10 @@ def get_shift_board(year: int, month: int):
         "staffs": staffs_res.data,
         "days": shift_days_res.data,
     }
+
 import os
 import requests
 from datetime import datetime, timedelta
-
 
 BEDS24_API_BASE = os.getenv("BEDS24_API_BASE", "https://beds24.com/api/v2")
 BEDS24_TOKEN = os.getenv("BEDS24_TOKEN", "")
@@ -686,11 +686,14 @@ def normalize_property_name(name: str) -> str:
     if not name:
         return ""
 
-    # 必要に応じてここを増やしてください
     hotel_map = {
         "FFFホテル": "FFFホテル",
         "美野島A": "美野島",
         "美野島B": "美野島",
+        "冷泉A": "冷泉",
+        "冷泉B": "冷泉",
+        "西中洲A": "西中洲",
+        "西中洲B": "西中洲",
     }
 
     for k, v in hotel_map.items():
@@ -698,6 +701,12 @@ def normalize_property_name(name: str) -> str:
             return v
 
     return name.strip()
+
+
+def normalize_room_name(name: str) -> str:
+    if not name:
+        return ""
+    return str(name).strip()
 
 
 def calc_load_score(guest_count: int, gap_nights: int) -> int:
@@ -711,14 +720,53 @@ def calc_load_score(guest_count: int, gap_nights: int) -> int:
     return score
 
 
+def extract_booking_fields(b: dict):
+    booking_id = str(b.get("id") or b.get("bookingId") or "")
+
+    property_name_raw = (
+        b.get("propertyName")
+        or b.get("property")
+        or b.get("propName")
+        or ""
+    )
+
+    room_name_raw = (
+        b.get("roomName")
+        or b.get("unitName")
+        or b.get("room")
+        or ""
+    )
+
+    checkin = (
+        b.get("arrival")
+        or b.get("checkIn")
+        or b.get("firstNight")
+    )
+
+    checkout = (
+        b.get("departure")
+        or b.get("checkOut")
+        or b.get("lastNight")
+    )
+
+    status_raw = str(b.get("status") or "")
+    guest_count = int(b.get("numAdult", 0) or 0) + int(b.get("numChild", 0) or 0)
+
+    return {
+        "booking_id": booking_id,
+        "property_name_raw": property_name_raw,
+        "room_name_raw": room_name_raw,
+        "checkin": checkin,
+        "checkout": checkout,
+        "status_raw": status_raw,
+        "guest_count": guest_count,
+    }
+
+
 @app.get("/beds24/bookings/test")
 def beds24_bookings_test():
-    """
-    Beds24から予約一覧をそのまま取得して確認するテスト用
-    """
     url = f"{BEDS24_API_BASE}/bookings"
     params = {
-        # 直近30日を確認。必要に応じて変更
         "from": (date.today() - timedelta(days=3)).isoformat(),
         "to": (date.today() + timedelta(days=30)).isoformat(),
     }
@@ -736,9 +784,6 @@ def beds24_sync_bookings(
     from_date: str | None = Body(None),
     to_date: str | None = Body(None),
 ):
-    """
-    Beds24予約 → cleaning_tasks 同期
-    """
     sync_from = from_date or (date.today() - timedelta(days=1)).isoformat()
     sync_to = to_date or (date.today() + timedelta(days=60)).isoformat()
 
@@ -755,61 +800,81 @@ def beds24_sync_bookings(
 
     bookings = beds24_res.json()
 
-    synced = []
+    raw_saved = []
+    processed_saved = []
+    cleaning_saved = []
     skipped = []
 
     for b in bookings:
         try:
-            # Beds24の返却キー名はアカウント設定や取得項目で差があり得るため、
-            # 必要なら /beds24/bookings/test で実データ確認後にここを微修正してください。
-            property_name_raw = (
-                b.get("propertyName")
-                or b.get("property")
-                or b.get("propName")
-                or ""
-            )
-            room_name_raw = (
-                b.get("roomName")
-                or b.get("unitName")
-                or b.get("room")
-                or ""
-            )
+            extracted = extract_booking_fields(b)
 
-            checkin = (
-                b.get("arrival")
-                or b.get("checkIn")
-                or b.get("firstNight")
-            )
-            checkout = (
-                b.get("departure")
-                or b.get("checkOut")
-                or b.get("lastNight")
-            )
+            booking_id = extracted["booking_id"]
+            property_name_raw = extracted["property_name_raw"]
+            room_name_raw = extracted["room_name_raw"]
+            checkin = extracted["checkin"]
+            checkout = extracted["checkout"]
+            status_raw = extracted["status_raw"]
+            guest_count = extracted["guest_count"]
 
-            status = (b.get("status") or "").lower()
-            guest_count = int(
-                b.get("numAdult", 0) or 0
-            ) + int(
-                b.get("numChild", 0) or 0
-            )
+            # 1. 生データ保存
+            raw_payload = {
+                "booking_id": booking_id,
+                "raw_json": b,
+            }
+
+            raw_res = supabase.table("beds24_raw_bookings").insert(raw_payload).execute()
+            raw_saved.append({
+                "booking_id": booking_id,
+                "raw_count": len(raw_res.data or []),
+            })
 
             if not property_name_raw or not room_name_raw or not checkout:
                 skipped.append({
                     "reason": "missing required fields",
-                    "booking": b,
+                    "booking_id": booking_id,
                 })
                 continue
 
-            # キャンセル系除外
-            if "cancel" in status:
+            property_name_normalized = normalize_property_name(property_name_raw)
+            room_name_normalized = normalize_room_name(room_name_raw)
+            room_key = f"{property_name_normalized}{room_name_normalized}"
+
+            is_cancelled = "cancel" in status_raw.lower()
+
+            # 2. 加工データ保存
+            processed_payload = {
+                "booking_id": booking_id,
+                "property_name_raw": property_name_raw,
+                "property_name_normalized": property_name_normalized,
+                "room_name_raw": room_name_raw,
+                "room_name_normalized": room_name_normalized,
+                "room_key": room_key,
+                "checkin_date": checkin[:10] if checkin else None,
+                "checkout_date": checkout[:10] if checkout else None,
+                "guest_count": guest_count,
+                "status_raw": status_raw,
+                "is_cancelled": is_cancelled,
+            }
+
+            processed_res = (
+                supabase.table("beds24_processed_bookings")
+                .upsert(processed_payload, on_conflict="booking_id")
+                .execute()
+            )
+
+            processed_saved.append({
+                "booking_id": booking_id,
+                "processed_count": len(processed_res.data or []),
+            })
+
+            # キャンセルは cleaning_tasks へ入れない
+            if is_cancelled:
                 skipped.append({
                     "reason": "cancelled",
-                    "booking_id": b.get("id") or b.get("bookingId"),
+                    "booking_id": booking_id,
                 })
                 continue
-
-            property_name = normalize_property_name(property_name_raw)
-            room_name = str(room_name_raw).strip()
 
             task_date = checkout[:10]
             checkout_date = checkout[:10]
@@ -824,13 +889,13 @@ def beds24_sync_bookings(
                 except Exception:
                     gap_nights = 0
 
-            room_key = f"{property_name}{room_name}"
             load_score = calc_load_score(guest_count, gap_nights)
 
-            payload = {
-                "reservation_id": str(b.get("id") or b.get("bookingId") or ""),
-                "property_name": property_name,
-                "room_name": room_name,
+            # 3. 清掃タスク保存
+            cleaning_payload = {
+                "reservation_id": booking_id,
+                "property_name": property_name_normalized,
+                "room_name": room_name_normalized,
                 "room_key": room_key,
                 "task_date": task_date,
                 "checkout_date": checkout_date,
@@ -843,18 +908,17 @@ def beds24_sync_bookings(
                 "source": "beds24",
             }
 
-            # reservation_id がある前提の upsert
-            res = (
+            cleaning_res = (
                 supabase.table("cleaning_tasks")
-                .upsert(payload, on_conflict="reservation_id")
+                .upsert(cleaning_payload, on_conflict="reservation_id")
                 .execute()
             )
 
-            synced.append({
-                "reservation_id": payload["reservation_id"],
-                "room_key": payload["room_key"],
-                "task_date": payload["task_date"],
-                "result_count": len(res.data or []),
+            cleaning_saved.append({
+                "booking_id": booking_id,
+                "room_key": room_key,
+                "task_date": task_date,
+                "cleaning_count": len(cleaning_res.data or []),
             })
 
         except Exception as e:
@@ -866,8 +930,12 @@ def beds24_sync_bookings(
     return {
         "from": sync_from,
         "to": sync_to,
-        "synced_count": len(synced),
+        "raw_saved_count": len(raw_saved),
+        "processed_saved_count": len(processed_saved),
+        "cleaning_saved_count": len(cleaning_saved),
         "skipped_count": len(skipped),
-        "synced": synced,
+        "raw_saved": raw_saved,
+        "processed_saved": processed_saved,
+        "cleaning_saved": cleaning_saved,
         "skipped": skipped,
     }
