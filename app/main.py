@@ -663,3 +663,211 @@ def get_shift_board(year: int, month: int):
         "staffs": staffs_res.data,
         "days": shift_days_res.data,
     }
+import os
+import requests
+from datetime import datetime, timedelta
+
+
+BEDS24_API_BASE = os.getenv("BEDS24_API_BASE", "https://beds24.com/api/v2")
+BEDS24_TOKEN = os.getenv("BEDS24_TOKEN", "")
+
+
+def beds24_headers():
+    if not BEDS24_TOKEN:
+        raise HTTPException(status_code=500, detail="BEDS24_TOKEN is not set")
+
+    return {
+        "accept": "application/json",
+        "token": BEDS24_TOKEN,
+    }
+
+
+def normalize_property_name(name: str) -> str:
+    if not name:
+        return ""
+
+    # 必要に応じてここを増やしてください
+    hotel_map = {
+        "FFFホテル": "FFFホテル",
+        "美野島A": "美野島",
+        "美野島B": "美野島",
+    }
+
+    for k, v in hotel_map.items():
+        if k in name:
+            return v
+
+    return name.strip()
+
+
+def calc_load_score(guest_count: int, gap_nights: int) -> int:
+    score = guest_count or 0
+
+    if gap_nights == 0:
+        score += 2
+    elif gap_nights == 1:
+        score += 1
+
+    return score
+
+
+@app.get("/beds24/bookings/test")
+def beds24_bookings_test():
+    """
+    Beds24から予約一覧をそのまま取得して確認するテスト用
+    """
+    url = f"{BEDS24_API_BASE}/bookings"
+    params = {
+        # 直近30日を確認。必要に応じて変更
+        "from": (date.today() - timedelta(days=3)).isoformat(),
+        "to": (date.today() + timedelta(days=30)).isoformat(),
+    }
+
+    res = requests.get(url, headers=beds24_headers(), params=params, timeout=30)
+
+    if res.status_code != 200:
+        raise HTTPException(status_code=res.status_code, detail=res.text)
+
+    return res.json()
+
+
+@app.post("/beds24/sync")
+def beds24_sync_bookings(
+    from_date: str | None = Body(None),
+    to_date: str | None = Body(None),
+):
+    """
+    Beds24予約 → cleaning_tasks 同期
+    """
+    sync_from = from_date or (date.today() - timedelta(days=1)).isoformat()
+    sync_to = to_date or (date.today() + timedelta(days=60)).isoformat()
+
+    url = f"{BEDS24_API_BASE}/bookings"
+    params = {
+        "from": sync_from,
+        "to": sync_to,
+    }
+
+    beds24_res = requests.get(url, headers=beds24_headers(), params=params, timeout=30)
+
+    if beds24_res.status_code != 200:
+        raise HTTPException(status_code=beds24_res.status_code, detail=beds24_res.text)
+
+    bookings = beds24_res.json()
+
+    synced = []
+    skipped = []
+
+    for b in bookings:
+        try:
+            # Beds24の返却キー名はアカウント設定や取得項目で差があり得るため、
+            # 必要なら /beds24/bookings/test で実データ確認後にここを微修正してください。
+            property_name_raw = (
+                b.get("propertyName")
+                or b.get("property")
+                or b.get("propName")
+                or ""
+            )
+            room_name_raw = (
+                b.get("roomName")
+                or b.get("unitName")
+                or b.get("room")
+                or ""
+            )
+
+            checkin = (
+                b.get("arrival")
+                or b.get("checkIn")
+                or b.get("firstNight")
+            )
+            checkout = (
+                b.get("departure")
+                or b.get("checkOut")
+                or b.get("lastNight")
+            )
+
+            status = (b.get("status") or "").lower()
+            guest_count = int(
+                b.get("numAdult", 0) or 0
+            ) + int(
+                b.get("numChild", 0) or 0
+            )
+
+            if not property_name_raw or not room_name_raw or not checkout:
+                skipped.append({
+                    "reason": "missing required fields",
+                    "booking": b,
+                })
+                continue
+
+            # キャンセル系除外
+            if "cancel" in status:
+                skipped.append({
+                    "reason": "cancelled",
+                    "booking_id": b.get("id") or b.get("bookingId"),
+                })
+                continue
+
+            property_name = normalize_property_name(property_name_raw)
+            room_name = str(room_name_raw).strip()
+
+            task_date = checkout[:10]
+            checkout_date = checkout[:10]
+            next_checkin_date = checkin[:10] if checkin else None
+
+            gap_nights = 0
+            if checkin and checkout:
+                try:
+                    co = datetime.fromisoformat(checkout[:10])
+                    ci = datetime.fromisoformat(checkin[:10])
+                    gap_nights = max((ci - co).days, 0)
+                except Exception:
+                    gap_nights = 0
+
+            room_key = f"{property_name}{room_name}"
+            load_score = calc_load_score(guest_count, gap_nights)
+
+            payload = {
+                "reservation_id": str(b.get("id") or b.get("bookingId") or ""),
+                "property_name": property_name,
+                "room_name": room_name,
+                "room_key": room_key,
+                "task_date": task_date,
+                "checkout_date": checkout_date,
+                "next_checkin_date": next_checkin_date,
+                "gap_nights": gap_nights,
+                "guest_count": guest_count,
+                "load_score": load_score,
+                "status": "未着手",
+                "note": "",
+                "source": "beds24",
+            }
+
+            # reservation_id がある前提の upsert
+            res = (
+                supabase.table("cleaning_tasks")
+                .upsert(payload, on_conflict="reservation_id")
+                .execute()
+            )
+
+            synced.append({
+                "reservation_id": payload["reservation_id"],
+                "room_key": payload["room_key"],
+                "task_date": payload["task_date"],
+                "result_count": len(res.data or []),
+            })
+
+        except Exception as e:
+            skipped.append({
+                "reason": str(e),
+                "booking_id": b.get("id") or b.get("bookingId"),
+            })
+
+    return {
+        "from": sync_from,
+        "to": sync_to,
+        "synced_count": len(synced),
+        "skipped_count": len(skipped),
+        "synced": synced,
+        "skipped": skipped,
+    }
