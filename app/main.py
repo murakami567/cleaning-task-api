@@ -667,7 +667,8 @@ def get_shift_board(year: int, month: int):
 import os
 import csv
 import io
-from datetime import timedelta
+import requests
+from datetime import date, datetime, timedelta
 
 BEDS24_CSV_URL = os.getenv("BEDS24_CSV_URL", "https://www.beds24.com/api/csv/getbookingscsv")
 BEDS24_CSV_USERNAME = os.getenv("BEDS24_CSV_USERNAME", "")
@@ -759,36 +760,42 @@ def safe_get(row, idx):
 
 @app.get("/beds24/csv/test")
 def beds24_csv_test():
-    if not BEDS24_CSV_USERNAME or not BEDS24_CSV_PASSWORD:
-        raise HTTPException(status_code=500, detail="BEDS24_CSV_USERNAME or BEDS24_CSV_PASSWORD is not set")
+    try:
+        if not BEDS24_CSV_USERNAME or not BEDS24_CSV_PASSWORD:
+            return {
+                "ok": False,
+                "step": "env_check",
+                "BEDS24_CSV_USERNAME_exists": bool(BEDS24_CSV_USERNAME),
+                "BEDS24_CSV_PASSWORD_exists": bool(BEDS24_CSV_PASSWORD),
+                "BEDS24_CSV_URL": BEDS24_CSV_URL,
+            }
 
-    today = date.today()
-    next_month_end = date(today.year, today.month, 1) + timedelta(days=62)
-    next_month_end = date(next_month_end.year, next_month_end.month, 1) - timedelta(days=1)
+        today = date.today()
+        next_month_end = date(today.year, today.month, 1) + timedelta(days=62)
+        next_month_end = date(next_month_end.year, next_month_end.month, 1) - timedelta(days=1)
 
-    payload = {
-        "username": BEDS24_CSV_USERNAME,
-        "password": BEDS24_CSV_PASSWORD,
-        "datefrom": format_jst_date_string(today),
-        "dateto": format_jst_date_string(next_month_end),
-    }
+        payload = {
+            "username": BEDS24_CSV_USERNAME,
+            "password": BEDS24_CSV_PASSWORD,
+            "datefrom": format_jst_date_string(today),
+            "dateto": format_jst_date_string(next_month_end),
+        }
 
-    res = requests.post(BEDS24_CSV_URL, data=payload, timeout=30)
+        res = requests.post(BEDS24_CSV_URL, data=payload, timeout=30)
 
-    if res.status_code != 200:
-        raise HTTPException(status_code=res.status_code, detail=res.text)
+        return {
+            "ok": True,
+            "status_code": res.status_code,
+            "content_type": res.headers.get("content-type"),
+            "text_head": res.text[:1500],
+        }
 
-    csv_text = res.text
-    csv_rows = parse_csv_text(csv_text)
-
-    if not csv_rows:
-        return {"row_count": 0, "sample": []}
-
-    return {
-        "row_count": len(csv_rows),
-        "header": csv_rows[0],
-        "sample": csv_rows[1:4]
-    }
+    except Exception as e:
+        return {
+            "ok": False,
+            "step": "exception",
+            "error": str(e),
+        }
 
 
 @app.post("/beds24/csv/sync")
