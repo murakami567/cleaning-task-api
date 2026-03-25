@@ -665,24 +665,20 @@ def get_shift_board(year: int, month: int):
     }
 
 import os
-import requests
-from datetime import datetime, timedelta
+import csv
+import io
+from datetime import timedelta
 
-BEDS24_API_BASE = os.getenv("BEDS24_API_BASE", "https://beds24.com/api/v2")
-BEDS24_TOKEN = os.getenv("BEDS24_TOKEN", "")
-
-
-def beds24_headers():
-    if not BEDS24_TOKEN:
-        raise HTTPException(status_code=500, detail="BEDS24_TOKEN is not set")
-
-    return {
-        "accept": "application/json",
-        "token": BEDS24_TOKEN,
-    }
+BEDS24_CSV_URL = os.getenv("BEDS24_CSV_URL", "https://www.beds24.com/api/csv/getbookingscsv")
+BEDS24_CSV_USERNAME = os.getenv("BEDS24_CSV_USERNAME", "")
+BEDS24_CSV_PASSWORD = os.getenv("BEDS24_CSV_PASSWORD", "")
 
 
-def normalize_property_name(name: str) -> str:
+def format_jst_date_string(dt: date) -> str:
+    return dt.strftime("%Y-%m-%d")
+
+
+def normalize_property_name_csv(name: str) -> str:
     if not name:
         return ""
 
@@ -700,184 +696,272 @@ def normalize_property_name(name: str) -> str:
         if k in name:
             return v
 
-    return name.strip()
-
-
-def normalize_room_name(name: str) -> str:
-    if not name:
-        return ""
     return str(name).strip()
 
 
-def calc_load_score(guest_count: int, gap_nights: int) -> int:
-    score = guest_count or 0
-    if gap_nights == 0:
-        score += 2
-    elif gap_nights == 1:
-        score += 1
-    return score
+def parse_csv_text(csv_text: str):
+    reader = csv.reader(io.StringIO(csv_text))
+    return list(reader)
 
 
-def extract_booking_fields(b: dict):
-    booking_id = str(b.get("id") or b.get("bookingId") or "")
-
-    property_name_raw = (
-        b.get("propertyName")
-        or b.get("property")
-        or b.get("propName")
-        or ""
-    )
-
-    room_name_raw = (
-        b.get("roomName")
-        or b.get("unitName")
-        or b.get("room")
-        or ""
-    )
-
-    checkin = (
-        b.get("arrival")
-        or b.get("checkIn")
-        or b.get("firstNight")
-    )
-
-    checkout = (
-        b.get("departure")
-        or b.get("checkOut")
-        or b.get("lastNight")
-    )
-
-    status_raw = str(b.get("status") or "")
-
-    title_raw = str(
-        b.get("title")
-        or b.get("Title")
-        or b.get("invoiceItemName")
-        or ""
-    )
-
-    guest_count = int(b.get("numAdult", 0) or 0) + int(b.get("numChild", 0) or 0)
-
-    return {
-        "booking_id": booking_id,
-        "property_name_raw": property_name_raw,
-        "room_name_raw": room_name_raw,
-        "checkin": checkin,
-        "checkout": checkout,
-        "status_raw": status_raw,
-        "title_raw": title_raw,
-        "guest_count": guest_count,
+def find_target_columns(header_row):
+    target_columns = {
+        "Title": -1,
+        "Property": -1,
+        "Unit": -1,
+        "FirstNight": -1,
+        "CheckOut": -1,
+        "Price": -1,
+        "Status": -1,
+        "Referer": -1,
+        "Adult": -1,
+        "Child": -1,
+        "Time Entered": -1,
+        "Full Name": -1,
     }
 
+    for i, h in enumerate(header_row):
+        header = str(h).strip()
+        if header in target_columns:
+            target_columns[header] = i
 
-@app.get("/beds24/bookings/test")
-def beds24_bookings_test():
-    url = f"{BEDS24_API_BASE}/bookings"
-    params = {
-        "from": (date.today() - timedelta(days=3)).isoformat(),
-        "to": (date.today() + timedelta(days=30)).isoformat(),
+    required = [
+        "Title",
+        "Property",
+        "Unit",
+        "FirstNight",
+        "CheckOut",
+        "Price",
+        "Status",
+        "Referer",
+        "Adult",
+        "Child",
+        "Time Entered",
+    ]
+
+    missing = [k for k in required if target_columns[k] == -1]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=f"required csv columns missing: {', '.join(missing)}"
+        )
+
+    return target_columns
+
+
+def safe_get(row, idx):
+    if idx < 0:
+        return ""
+    if idx >= len(row):
+        return ""
+    return row[idx]
+
+
+@app.get("/beds24/csv/test")
+def beds24_csv_test():
+    if not BEDS24_CSV_USERNAME or not BEDS24_CSV_PASSWORD:
+        raise HTTPException(status_code=500, detail="BEDS24_CSV_USERNAME or BEDS24_CSV_PASSWORD is not set")
+
+    today = date.today()
+    next_month_end = date(today.year, today.month, 1) + timedelta(days=62)
+    next_month_end = date(next_month_end.year, next_month_end.month, 1) - timedelta(days=1)
+
+    payload = {
+        "username": BEDS24_CSV_USERNAME,
+        "password": BEDS24_CSV_PASSWORD,
+        "datefrom": format_jst_date_string(today),
+        "dateto": format_jst_date_string(next_month_end),
     }
 
-    res = requests.get(url, headers=beds24_headers(), params=params, timeout=30)
+    res = requests.post(BEDS24_CSV_URL, data=payload, timeout=30)
 
     if res.status_code != 200:
         raise HTTPException(status_code=res.status_code, detail=res.text)
 
-    beds_json = res.json()
+    csv_text = res.text
+    csv_rows = parse_csv_text(csv_text)
+
+    if not csv_rows:
+        return {"row_count": 0, "sample": []}
+
     return {
-        "keys": list(beds_json.keys()) if isinstance(beds_json, dict) else [],
-        "sample": beds_json.get("data", [])[:3] if isinstance(beds_json, dict) else beds_json[:3],
+        "row_count": len(csv_rows),
+        "header": csv_rows[0],
+        "sample": csv_rows[1:4]
     }
 
 
-@app.post("/beds24/sync")
-def beds24_sync_bookings(
+@app.post("/beds24/csv/sync")
+def beds24_csv_sync(
     from_date: str | None = Body(None),
     to_date: str | None = Body(None),
 ):
-    sync_from = from_date or (date.today() - timedelta(days=1)).isoformat()
-    sync_to = to_date or (date.today() + timedelta(days=60)).isoformat()
+    if not BEDS24_CSV_USERNAME or not BEDS24_CSV_PASSWORD:
+        raise HTTPException(status_code=500, detail="BEDS24_CSV_USERNAME or BEDS24_CSV_PASSWORD is not set")
 
-    url = f"{BEDS24_API_BASE}/bookings"
-    params = {
-        "from": sync_from,
-        "to": sync_to,
+    today = date.today()
+
+    if from_date:
+        start_date_str = from_date
+    else:
+        start_date_str = format_jst_date_string(today)
+
+    if to_date:
+        end_date_str = to_date
+    else:
+        next_month_end = date(today.year, today.month, 1) + timedelta(days=62)
+        next_month_end = date(next_month_end.year, next_month_end.month, 1) - timedelta(days=1)
+        end_date_str = format_jst_date_string(next_month_end)
+
+    payload = {
+        "username": BEDS24_CSV_USERNAME,
+        "password": BEDS24_CSV_PASSWORD,
+        "datefrom": start_date_str,
+        "dateto": end_date_str,
     }
 
-    beds24_res = requests.get(url, headers=beds24_headers(), params=params, timeout=30)
+    res = requests.post(BEDS24_CSV_URL, data=payload, timeout=60)
 
-    if beds24_res.status_code != 200:
-        raise HTTPException(status_code=beds24_res.status_code, detail=beds24_res.text)
+    if res.status_code != 200:
+        raise HTTPException(status_code=res.status_code, detail=res.text)
 
-    beds_json = beds24_res.json()
-    bookings = beds_json.get("data", [])
+    csv_text = res.text
+    csv_rows = parse_csv_text(csv_text)
+
+    if not csv_rows or len(csv_rows) == 0:
+        return {
+            "from": start_date_str,
+            "to": end_date_str,
+            "raw_saved_count": 0,
+            "processed_saved_count": 0,
+            "cleaning_saved_count": 0,
+            "skipped_count": 0,
+            "message": "csv empty"
+        }
+
+    header_row = csv_rows[0]
+    target_columns = find_target_columns(header_row)
 
     raw_saved = []
     processed_saved = []
     cleaning_saved = []
     skipped = []
 
-    for b in bookings:
+    for i in range(1, len(csv_rows)):
+        row = csv_rows[i]
+
+        title = safe_get(row, target_columns["Title"])
+        status = safe_get(row, target_columns["Status"])
+        property_name_raw = safe_get(row, target_columns["Property"])
+        unit_raw = safe_get(row, target_columns["Unit"])
+        full_name = safe_get(row, target_columns["Full Name"])
+        first_night = safe_get(row, target_columns["FirstNight"])
+        check_out = safe_get(row, target_columns["CheckOut"])
+        price = safe_get(row, target_columns["Price"])
+        referer = safe_get(row, target_columns["Referer"])
+        adult_raw = safe_get(row, target_columns["Adult"])
+        child_raw = safe_get(row, target_columns["Child"])
+        time_entered = safe_get(row, target_columns["Time Entered"])
+
+        raw_booking_id = f"{property_name_raw}_{unit_raw}_{first_night}_{check_out}_{i}"
+
         try:
-            extracted = extract_booking_fields(b)
-
-            booking_id = extracted["booking_id"]
-            property_name_raw = extracted["property_name_raw"]
-            room_name_raw = extracted["room_name_raw"]
-            checkin = extracted["checkin"]
-            checkout = extracted["checkout"]
-            status_raw = extracted["status_raw"]
-            title_raw = extracted["title_raw"]
-            guest_count = extracted["guest_count"]
-
             raw_payload = {
-                "booking_id": booking_id,
-                "raw_json": b,
+                "booking_id": raw_booking_id,
+                "raw_json": {
+                    "Title": title,
+                    "Property": property_name_raw,
+                    "Unit": unit_raw,
+                    "FirstNight": first_night,
+                    "CheckOut": check_out,
+                    "Price": price,
+                    "Status": status,
+                    "Referer": referer,
+                    "Adult": adult_raw,
+                    "Child": child_raw,
+                    "Time Entered": time_entered,
+                    "Full Name": full_name,
+                },
             }
 
             raw_res = supabase.table("beds24_raw_bookings").insert(raw_payload).execute()
             raw_saved.append({
-                "booking_id": booking_id,
+                "booking_id": raw_booking_id,
                 "raw_count": len(raw_res.data or []),
             })
+        except Exception as e:
+            skipped.append({
+                "reason": f"raw save error: {str(e)}",
+                "booking_id": raw_booking_id,
+            })
+            continue
 
-            if not property_name_raw or not room_name_raw or not checkout:
-                skipped.append({
-                    "reason": "missing required fields",
-                    "booking_id": booking_id,
-                })
-                continue
+        if status == "Cancelled":
+            skipped.append({
+                "reason": "cancelled",
+                "booking_id": raw_booking_id,
+            })
+            continue
 
-            property_name_normalized = normalize_property_name(property_name_raw)
-            room_name_normalized = normalize_room_name(room_name_raw)
-            room_key = f"{property_name_normalized}{room_name_normalized}"
+        if "ブロック" in title:
+            skipped.append({
+                "reason": "blocked_by_title",
+                "booking_id": raw_booking_id,
+            })
+            continue
 
-            status_lower = status_raw.lower()
-            title_lower = title_raw.lower()
+        if "予備部屋" in title:
+            skipped.append({
+                "reason": "reserve_room_by_title",
+                "booking_id": raw_booking_id,
+            })
+            continue
 
-            is_cancelled = "cancel" in status_lower
-            is_blocked = (
-                "block" in title_lower
-                or "blocked" in title_lower
-                or "ブロック" in title_raw
-            )
+        property_name_normalized = normalize_property_name_csv(property_name_raw)
+        unit_normalized = str(unit_raw).strip()
 
-            processed_payload = {
-                "booking_id": booking_id,
-                "property_name_raw": property_name_raw,
-                "property_name_normalized": property_name_normalized,
-                "room_name_raw": room_name_raw,
-                "room_name_normalized": room_name_normalized,
-                "room_key": room_key,
-                "checkin_date": checkin[:10] if checkin else None,
-                "checkout_date": checkout[:10] if checkout else None,
-                "guest_count": guest_count,
-                "status_raw": status_raw,
-                "title_raw": title_raw,
-                "is_cancelled": is_cancelled,
-                "is_blocked": is_blocked,
-            }
+        if any(ch.isdigit() for ch in property_name_raw):
+            unit_normalized = "".join([c for c in unit_normalized if not c.isdigit()])
 
+        property_unit_key = f"{property_name_raw}{unit_normalized}"
+        room_key = f"{property_name_normalized}{unit_normalized}"
+
+        try:
+            adult_count = int(adult_raw or 0)
+        except Exception:
+            adult_count = 0
+
+        try:
+            child_count = int(child_raw or 0)
+        except Exception:
+            child_count = 0
+
+        guest_count = adult_count + child_count
+
+        processed_payload = {
+            "booking_id": raw_booking_id,
+            "full_name": full_name,
+            "title_raw": title,
+            "property_name_raw": property_name_raw,
+            "property_name_normalized": property_name_normalized,
+            "room_name_raw": unit_raw,
+            "room_name_normalized": unit_normalized,
+            "room_key": room_key,
+            "checkin_date": first_night if first_night else None,
+            "checkout_date": check_out if check_out else None,
+            "price": price,
+            "status_raw": status,
+            "referer": referer,
+            "adult_count": adult_count,
+            "child_count": child_count,
+            "guest_count": guest_count,
+            "time_entered": time_entered,
+            "property_unit_key": property_unit_key,
+            "is_cancelled": False,
+            "is_blocked": False,
+        }
+
+        try:
             processed_res = (
                 supabase.table("beds24_processed_bookings")
                 .upsert(processed_payload, on_conflict="booking_id")
@@ -885,56 +969,55 @@ def beds24_sync_bookings(
             )
 
             processed_saved.append({
-                "booking_id": booking_id,
+                "booking_id": raw_booking_id,
                 "processed_count": len(processed_res.data or []),
             })
+        except Exception as e:
+            skipped.append({
+                "reason": f"processed save error: {str(e)}",
+                "booking_id": raw_booking_id,
+            })
+            continue
 
-            if is_cancelled:
-                skipped.append({
-                    "reason": "cancelled",
-                    "booking_id": booking_id,
-                })
-                continue
+        if not check_out:
+            skipped.append({
+                "reason": "missing checkout",
+                "booking_id": raw_booking_id,
+            })
+            continue
 
-            if is_blocked:
-                skipped.append({
-                    "reason": "blocked_by_title",
-                    "booking_id": booking_id,
-                    "title_raw": title_raw,
-                })
-                continue
+        task_date = check_out
+        checkout_date = check_out
+        next_checkin_date = first_night if first_night else None
 
-            task_date = checkout[:10]
-            checkout_date = checkout[:10]
-            next_checkin_date = checkin[:10] if checkin else None
+        gap_nights = 0
+        if first_night and check_out:
+            try:
+                co = datetime.fromisoformat(check_out[:10])
+                ci = datetime.fromisoformat(first_night[:10])
+                gap_nights = max((ci - co).days, 0)
+            except Exception:
+                gap_nights = 0
 
-            gap_nights = 0
-            if checkin and checkout:
-                try:
-                    co = datetime.fromisoformat(checkout[:10])
-                    ci = datetime.fromisoformat(checkin[:10])
-                    gap_nights = max((ci - co).days, 0)
-                except Exception:
-                    gap_nights = 0
+        load_score = calc_load_score(guest_count, gap_nights)
 
-            load_score = calc_load_score(guest_count, gap_nights)
+        cleaning_payload = {
+            "reservation_id": raw_booking_id,
+            "property_name": property_name_normalized,
+            "room_name": unit_normalized,
+            "room_key": room_key,
+            "task_date": task_date,
+            "checkout_date": checkout_date,
+            "next_checkin_date": next_checkin_date,
+            "gap_nights": gap_nights,
+            "guest_count": guest_count,
+            "load_score": load_score,
+            "status": "未着手",
+            "note": "",
+            "source": "beds24_csv",
+        }
 
-            cleaning_payload = {
-                "reservation_id": booking_id,
-                "property_name": property_name_normalized,
-                "room_name": room_name_normalized,
-                "room_key": room_key,
-                "task_date": task_date,
-                "checkout_date": checkout_date,
-                "next_checkin_date": next_checkin_date,
-                "gap_nights": gap_nights,
-                "guest_count": guest_count,
-                "load_score": load_score,
-                "status": "未着手",
-                "note": "",
-                "source": "beds24",
-            }
-
+        try:
             cleaning_res = (
                 supabase.table("cleaning_tasks")
                 .upsert(cleaning_payload, on_conflict="reservation_id")
@@ -942,21 +1025,20 @@ def beds24_sync_bookings(
             )
 
             cleaning_saved.append({
-                "booking_id": booking_id,
+                "booking_id": raw_booking_id,
                 "room_key": room_key,
                 "task_date": task_date,
                 "cleaning_count": len(cleaning_res.data or []),
             })
-
         except Exception as e:
             skipped.append({
-                "reason": str(e),
-                "booking_id": b.get("id") or b.get("bookingId"),
+                "reason": f"cleaning save error: {str(e)}",
+                "booking_id": raw_booking_id,
             })
 
     return {
-        "from": sync_from,
-        "to": sync_to,
+        "from": start_date_str,
+        "to": end_date_str,
         "raw_saved_count": len(raw_saved),
         "processed_saved_count": len(processed_saved),
         "cleaning_saved_count": len(cleaning_saved),
