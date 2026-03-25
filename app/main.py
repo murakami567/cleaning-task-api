@@ -785,7 +785,8 @@ def beds24_bookings_test():
     if res.status_code != 200:
         raise HTTPException(status_code=res.status_code, detail=res.text)
 
-    return res.json()
+    beds_json = res.json()
+    return beds_json.get("data", [])
 
 
 @app.post("/beds24/sync")
@@ -807,7 +808,8 @@ def beds24_sync_bookings(
     if beds24_res.status_code != 200:
         raise HTTPException(status_code=beds24_res.status_code, detail=beds24_res.text)
 
-    bookings = beds24_res.json()
+    beds_json = beds24_res.json()
+    bookings = beds_json.get("data", [])
 
     raw_saved = []
     processed_saved = []
