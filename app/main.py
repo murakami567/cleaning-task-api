@@ -731,7 +731,7 @@ def find_target_columns(header_row):
         "Property",
         "Unit",
         "FirstNight",
-        "CheckOut",
+        "Check Out",
         "Price",
         "Status",
         "Referer",
@@ -758,46 +758,6 @@ def safe_get(row, idx):
     return row[idx]
 
 
-@app.get("/beds24/csv/test")
-def beds24_csv_test():
-    try:
-        if not BEDS24_CSV_USERNAME or not BEDS24_CSV_PASSWORD:
-            return {
-                "ok": False,
-                "step": "env_check",
-                "BEDS24_CSV_USERNAME_exists": bool(BEDS24_CSV_USERNAME),
-                "BEDS24_CSV_PASSWORD_exists": bool(BEDS24_CSV_PASSWORD),
-                "BEDS24_CSV_URL": BEDS24_CSV_URL,
-            }
-
-        today = date.today()
-        next_month_end = date(today.year, today.month, 1) + timedelta(days=62)
-        next_month_end = date(next_month_end.year, next_month_end.month, 1) - timedelta(days=1)
-
-        payload = {
-            "username": BEDS24_CSV_USERNAME,
-            "password": BEDS24_CSV_PASSWORD,
-            "datefrom": format_jst_date_string(today),
-            "dateto": format_jst_date_string(next_month_end),
-        }
-
-        res = requests.post(BEDS24_CSV_URL, data=payload, timeout=30)
-
-        return {
-            "ok": True,
-            "status_code": res.status_code,
-            "content_type": res.headers.get("content-type"),
-            "text_head": res.text[:1500],
-        }
-
-    except Exception as e:
-        return {
-            "ok": False,
-            "step": "exception",
-            "error": str(e),
-        }
-
-
 @app.post("/beds24/csv/sync")
 def beds24_csv_sync(
     from_date: str | None = Body(None),
@@ -811,12 +771,12 @@ def beds24_csv_sync(
 
     today = date.today()
 
-    if from_date:
+    if from_date and from_date != "string":
         start_date_str = from_date
     else:
         start_date_str = format_jst_date_string(today)
 
-    if to_date:
+    if to_date and to_date != "string":
         end_date_str = to_date
     else:
         next_month_end = date(today.year, today.month, 1) + timedelta(days=62)
@@ -849,10 +809,15 @@ def beds24_csv_sync(
         return {
             "from": start_date_str,
             "to": end_date_str,
+            "csv_row_count": 0,
             "raw_saved_count": 0,
             "processed_saved_count": 0,
             "cleaning_saved_count": 0,
             "skipped_count": 0,
+            "raw_saved": [],
+            "processed_saved": [],
+            "cleaning_saved": [],
+            "skipped": [],
             "message": "csv empty"
         }
 
@@ -887,9 +852,7 @@ def beds24_csv_sync(
 
             raw_booking_id = f"{property_name_raw}_{unit_raw}_{first_night}_{check_out}_{i}"
 
-            # -----------------------------
-            # 1. raw保存
-            # -----------------------------
+            # raw 保存
             raw_payload = {
                 "booking_id": raw_booking_id,
                 "raw_json": {
@@ -897,7 +860,7 @@ def beds24_csv_sync(
                     "Property": property_name_raw,
                     "Unit": unit_raw,
                     "FirstNight": first_night,
-                    "CheckOut": check_out,
+                    "Check Out": check_out,
                     "Price": price,
                     "Status": status,
                     "Referer": referer,
@@ -925,9 +888,7 @@ def beds24_csv_sync(
                 })
                 continue
 
-            # -----------------------------
-            # 2. 除外判定（GAS準拠）
-            # -----------------------------
+            # GAS 準拠の除外
             if status == "Cancelled":
                 skipped.append({
                     "reason": "cancelled",
@@ -949,13 +910,10 @@ def beds24_csv_sync(
                 })
                 continue
 
-            # -----------------------------
-            # 3. 加工
-            # -----------------------------
+            # 加工
             property_name_normalized = normalize_property_name_csv(property_name_raw)
             unit_normalized = str(unit_raw).strip()
 
-            # GAS準拠：propertyに数字が含まれる場合はunitから数字を除去
             if any(ch.isdigit() for ch in str(property_name_raw)):
                 unit_normalized = "".join([c for c in unit_normalized if not c.isdigit()])
 
@@ -983,8 +941,8 @@ def beds24_csv_sync(
                 "room_name_raw": unit_raw,
                 "room_name_normalized": unit_normalized,
                 "room_key": room_key,
-                "checkin_date": first_night if first_night else None,
-                "checkout_date": check_out if check_out else None,
+                "checkin_date": first_night[:10] if first_night else None,
+                "checkout_date": check_out[:10] if check_out else None,
                 "price": price,
                 "status_raw": status,
                 "referer": referer,
@@ -997,9 +955,6 @@ def beds24_csv_sync(
                 "is_blocked": False,
             }
 
-            # -----------------------------
-            # 4. processed保存
-            # -----------------------------
             try:
                 processed_res = (
                     supabase.table("beds24_processed_bookings")
@@ -1018,9 +973,7 @@ def beds24_csv_sync(
                 })
                 continue
 
-            # -----------------------------
-            # 5. cleaning_tasks生成
-            # -----------------------------
+            # cleaning_tasks 生成
             if not check_out:
                 skipped.append({
                     "reason": "missing checkout",
