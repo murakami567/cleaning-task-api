@@ -711,7 +711,7 @@ def find_target_columns(header_row):
         "Property": -1,
         "Unit": -1,
         "FirstNight": -1,
-        "CheckOut": -1,
+        "Check Out": -1,
         "Price": -1,
         "Status": -1,
         "Referer": -1,
@@ -878,7 +878,7 @@ def beds24_csv_sync(
             unit_raw = safe_get(row, target_columns["Unit"])
             full_name = safe_get(row, target_columns["Full Name"])
             first_night = safe_get(row, target_columns["FirstNight"])
-            check_out = safe_get(row, target_columns["CheckOut"])
+            check_out = safe_get(row, target_columns["Check Out"])
             price = safe_get(row, target_columns["Price"])
             referer = safe_get(row, target_columns["Referer"])
             adult_raw = safe_get(row, target_columns["Adult"])
