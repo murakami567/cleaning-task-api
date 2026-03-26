@@ -1,8 +1,15 @@
-from datetime import date
+import os
+import csv
+import io
+import requests
+from datetime import date, datetime, timedelta
 from calendar import monthrange
+
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.db import supabase
+
 
 app = FastAPI()
 
@@ -19,14 +26,17 @@ app.add_middleware(
 )
 
 
+# =========================================================
+# 基本
+# =========================================================
 @app.get("/")
 def root():
     return {"status": "ok"}
 
 
-# -----------------------------
+# =========================================================
 # 清掃タスク
-# -----------------------------
+# =========================================================
 @app.get("/tasks/today")
 def get_today_tasks():
     today = date.today().isoformat()
@@ -123,9 +133,9 @@ def update_task(
     return res.data[0]
 
 
-# -----------------------------
+# =========================================================
 # 物件一覧 / 物件管理
-# -----------------------------
+# =========================================================
 @app.get("/properties")
 def get_properties():
     res = (
@@ -192,9 +202,9 @@ def update_property(
     return res.data[0]
 
 
-# -----------------------------
+# =========================================================
 # 部屋一覧 / 部屋管理
-# -----------------------------
+# =========================================================
 @app.get("/rooms")
 def get_rooms(property_id: str | None = None):
     query = (
@@ -277,9 +287,9 @@ def update_room(
     return res.data[0]
 
 
-# -----------------------------
+# =========================================================
 # 新規オープン進捗
-# -----------------------------
+# =========================================================
 @app.get("/openings")
 def get_openings():
     res = (
@@ -365,9 +375,9 @@ def update_opening(
     return res.data[0]
 
 
-# -----------------------------
+# =========================================================
 # 設備管理
-# -----------------------------
+# =========================================================
 @app.get("/facilities")
 def get_facilities():
     res = (
@@ -449,9 +459,9 @@ def update_facility(
     return res.data[0]
 
 
-# -----------------------------
+# =========================================================
 # スタッフ
-# -----------------------------
+# =========================================================
 @app.get("/staffs")
 def get_staffs():
     res = (
@@ -522,9 +532,9 @@ def update_staff(
     return res.data[0]
 
 
-# -----------------------------
+# =========================================================
 # シフト管理
-# -----------------------------
+# =========================================================
 @app.get("/shifts")
 def get_shifts(shift_date: str | None = None):
     query = (
@@ -632,9 +642,9 @@ def upsert_shift_entry(
     return res.data[0]
 
 
-# -----------------------------
+# =========================================================
 # 月間シフト表
-# -----------------------------
+# =========================================================
 @app.get("/shift-board")
 def get_shift_board(year: int, month: int):
     start_date = f"{year}-{month:02d}-01"
@@ -664,13 +674,10 @@ def get_shift_board(year: int, month: int):
         "days": shift_days_res.data,
     }
 
-import os
-import csv
-import io
-import requests
-from datetime import date, datetime, timedelta
-from fastapi import Body, HTTPException
 
+# =========================================================
+# Beds24 CSV 同期
+# =========================================================
 BEDS24_CSV_URL = os.getenv("BEDS24_CSV_URL", "https://www.beds24.com/api/csv/getbookingscsv")
 BEDS24_CSV_USERNAME = os.getenv("BEDS24_CSV_USERNAME", "")
 BEDS24_CSV_PASSWORD = os.getenv("BEDS24_CSV_PASSWORD", "")
@@ -752,9 +759,7 @@ def find_target_columns(header_row):
 
 
 def safe_get(row, idx):
-    if idx < 0:
-        return ""
-    if idx >= len(row):
+    if idx < 0 or idx >= len(row):
         return ""
     return row[idx]
 
@@ -785,29 +790,13 @@ def parse_beds24_date(date_str: str | None):
     if not s:
         return None
 
-    # ISO系
-    try:
-        return datetime.fromisoformat(s[:10]).date().isoformat()
-    except Exception:
-        pass
-
-    # 28 Mar 2026
-    try:
-        return datetime.strptime(s, "%d %b %Y").date().isoformat()
-    except Exception:
-        pass
-
-    # 28 Mar 2026 00:00
-    try:
-        return datetime.strptime(s, "%d %b %Y %H:%M").date().isoformat()
-    except Exception:
-        pass
-
-    # 念のためカンマ除去
-    try:
-        return datetime.strptime(s.replace(",", ""), "%d %b %Y").date().isoformat()
-    except Exception:
-        pass
+    for fmt in ("%Y-%m-%d", "%d %b %Y", "%d %b %Y %H:%M"):
+        try:
+            if fmt == "%Y-%m-%d":
+                return datetime.fromisoformat(s[:10]).date().isoformat()
+            return datetime.strptime(s.replace(",", ""), fmt).date().isoformat()
+        except Exception:
+            pass
 
     return None
 
@@ -901,11 +890,9 @@ def beds24_csv_sync(
             "processed_saved": [],
             "cleaning_saved": [],
             "skipped": [],
-            "message": "csv empty",
         }
 
-    header_row = csv_rows[0]
-    target_columns = find_target_columns(header_row)
+    target_columns = find_target_columns(csv_rows[0])
 
     raw_saved = []
     processed_saved = []
@@ -954,11 +941,7 @@ def beds24_csv_sync(
             }
 
             try:
-                raw_res = (
-                    supabase.table("beds24_raw_bookings")
-                    .insert(raw_payload)
-                    .execute()
-                )
+                raw_res = supabase.table("beds24_raw_bookings").insert(raw_payload).execute()
                 raw_saved.append({
                     "booking_id": raw_booking_id,
                     "raw_count": len(raw_res.data or []),
@@ -996,7 +979,6 @@ def beds24_csv_sync(
             property_name_normalized = normalize_property_name_csv(property_name_raw)
             unit_normalized = str(unit_raw).strip()
 
-            # GAS準拠: propertyに数字が含まれる場合はunitから数字を除去
             if any(ch.isdigit() for ch in str(property_name_raw)):
                 unit_normalized = "".join([c for c in unit_normalized if not c.isdigit()])
 
@@ -1052,7 +1034,6 @@ def beds24_csv_sync(
                 skipped.append({
                     "reason": f"processed save error: {str(e)}",
                     "booking_id": raw_booking_id,
-                    "payload": processed_payload,
                 })
                 continue
 
@@ -1065,31 +1046,26 @@ def beds24_csv_sync(
                 })
                 continue
 
-            task_date = checkout_date
-            next_checkin_date = checkin_date
-
             gap_nights = 0
-            if checkout_date and next_checkin_date:
+            if checkout_date and checkin_date:
                 try:
                     co = datetime.fromisoformat(checkout_date)
-                    ci = datetime.fromisoformat(next_checkin_date)
+                    ci = datetime.fromisoformat(checkin_date)
                     gap_nights = max((ci - co).days, 0)
                 except Exception:
                     gap_nights = 0
-
-            load_score = calc_load_score(guest_count, gap_nights)
 
             cleaning_payload = {
                 "reservation_id": raw_booking_id,
                 "property_name": property_name_normalized,
                 "room_name": unit_normalized,
                 "room_key": room_key,
-                "task_date": task_date,
+                "task_date": checkout_date,
                 "checkout_date": checkout_date,
-                "next_checkin_date": next_checkin_date,
+                "next_checkin_date": checkin_date,
                 "gap_nights": gap_nights,
                 "guest_count": guest_count,
-                "load_score": load_score,
+                "load_score": calc_load_score(guest_count, gap_nights),
                 "status": "未着手",
                 "note": "",
                 "source": "beds24_csv",
@@ -1103,15 +1079,12 @@ def beds24_csv_sync(
                 )
                 cleaning_saved.append({
                     "booking_id": raw_booking_id,
-                    "room_key": room_key,
-                    "task_date": task_date,
                     "cleaning_count": len(cleaning_res.data or []),
                 })
             except Exception as e:
                 skipped.append({
                     "reason": f"cleaning save error: {str(e)}",
                     "booking_id": raw_booking_id,
-                    "payload": cleaning_payload,
                 })
                 continue
 
@@ -1119,7 +1092,6 @@ def beds24_csv_sync(
             skipped.append({
                 "reason": f"row process error: {str(e)}",
                 "row_index": i,
-                "row_head": row[:12],
             })
 
     return {
