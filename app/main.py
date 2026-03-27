@@ -1056,27 +1056,27 @@ def beds24_csv_sync(
                     gap_nights = 0
 
             cleaning_payload = {
-                "reservation_id": raw_booking_id,
-                "property_name": property_name_normalized,
-                "room_name": unit_normalized,
-                "room_key": room_key,
-                "task_date": checkout_date,
-                "checkout_date": checkout_date,
-                "next_checkin_date": checkin_date,
-                "gap_nights": gap_nights,
-                "guest_count": guest_count,
-                "load_score": calc_load_score(guest_count, gap_nights),
-                "status": "未着手",
-                "note": "",
-                "source": "beds24_csv",
-            }
+    "booking_id": raw_booking_id,  # ←ここに変更
+    "property_name": property_name_normalized,
+    "room_name": unit_normalized,
+    "room_key": room_key,
+    "task_date": checkout_date,
+    "checkout_date": checkout_date,
+    "next_checkin_date": checkin_date,
+    "gap_nights": gap_nights,
+    "guest_count": guest_count,
+    "load_score": calc_load_score(guest_count, gap_nights),
+    "status": "未着手",
+    "note": "",
+    "source": "beds24_csv",
+}
 
             try:
                 cleaning_res = (
-                    supabase.table("cleaning_tasks")
-                    .upsert(cleaning_payload, on_conflict="reservation_id")
-                    .execute()
-                )
+    supabase.table("cleaning_tasks")
+    .upsert(cleaning_payload, on_conflict="booking_id")  # ←ここ重要
+    .execute()
+)
                 cleaning_saved.append({
                     "booking_id": raw_booking_id,
                     "cleaning_count": len(cleaning_res.data or []),
