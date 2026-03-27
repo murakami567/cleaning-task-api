@@ -1108,32 +1108,28 @@ def beds24_csv_sync(
     }
 import re
 
-def split_property_and_room(property_name_raw: str, unit_raw: str):
-    property_value = str(property_name_raw or "").strip()
-    unit_value = str(unit_raw or "").strip()
+def split_property_and_room(property_raw, unit_raw):
+    property_raw = str(property_raw or "").strip()
+    unit_raw = str(unit_raw or "").strip()
 
-    # まず通常の正規化
-    normalized_property = normalize_property_name_csv(property_value)
+    # 物件マスタ
+    property_list = [
+        "FFFホテル","やなぎ橋","住吉","アクシオン美野島","ブランシェ","ウィングス","美野島",
+        "玉井","ブランシェ","ウーブル博多","いそのビル","ジェン"、,"ルッシェ","東光","グランデエス",
+        "エスコート","アトラス","薬院","ロイズ","ピット","県庁前",
+        "西中洲","冷泉","駅前","比恵","浄水"
+    ]
 
-    # 美野島 / 西中洲 / 冷泉 は property側に部屋番号が含まれるケースを吸収
-    for base_name in ["美野島", "西中洲", "冷泉"]:
-        if property_value.startswith(base_name):
-            rest = property_value[len(base_name):].strip()
+    # propertyに部屋番号が付いているケース
+    for p in property_list:
+        if property_raw.startswith(p):
+            rest = property_raw.replace(p,"").strip()
 
-            # 例: 西中洲301 / 冷泉603 / 美野島A-101 など
-            if rest:
-                # unit が空なら property 側の残りを部屋として使う
-                if not unit_value:
-                    unit_value = rest
-                # property はベース名だけにする
-                normalized_property = base_name
-            break
+            # unitが空ならproperty側から取得
+            if not unit_raw and rest:
+                unit_raw = rest
 
-    # unit がまだ空で、propertyに末尾数字がついている場合の保険
-    if not unit_value:
-        m = re.match(r"^(FFFホテル|やなぎ橋|住吉|美野島|ブランシェ|ウィングス|玉井|ウーブル博多|いそのビル|ジェン|東光|グランデエス|エスコート|アトラス|薬院|ロイズ|ピット|県庁前|西中洲|冷泉|駅前|比恵)(.+)$", property_value)
-        if m:
-            normalized_property = m.group(1)
-            unit_value = m.group(2).strip()
+            return p, unit_raw
 
-    return normalized_property, unit_value
+    # fallback
+    return property_raw, unit_raw
