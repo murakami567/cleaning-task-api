@@ -976,11 +976,10 @@ def beds24_csv_sync(
                 continue
 
             # 3. 加工
-            property_name_normalized = normalize_property_name_csv(property_name_raw)
-            unit_normalized = str(unit_raw).strip()
-
-            if any(ch.isdigit() for ch in str(property_name_raw)):
-                unit_normalized = "".join([c for c in unit_normalized if not c.isdigit()])
+            property_name_normalized, unit_normalized = split_property_and_room(
+    property_name_raw,
+    unit_raw
+)
 
             property_unit_key = f"{property_name_raw}{unit_normalized}"
             room_key = f"{property_name_normalized}{unit_normalized}"
