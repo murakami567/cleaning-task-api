@@ -103,6 +103,10 @@ def update_task(
     task_id: str = Body(...),
     status: str | None = Body(None),
     note: str | None = Body(None),
+
+    assigned_staff_ids: list[str] | None = Body(None),
+    assigned_staff_names: list[str] | None = Body(None),
+
     assigned_staff_id: str | None = Body(None),
     assigned_staff_name: str | None = Body(None),
 ):
@@ -110,15 +114,34 @@ def update_task(
 
     if status is not None:
         payload["status"] = status
+
     if note is not None:
         payload["note"] = note
+
+    if assigned_staff_ids is not None:
+        payload["assigned_staff_ids"] = assigned_staff_ids
+
+    if assigned_staff_names is not None:
+        payload["assigned_staff_names"] = assigned_staff_names
+
+    # 旧方式も一応受ける
     if assigned_staff_id is not None:
         payload["assigned_staff_id"] = assigned_staff_id
+
     if assigned_staff_name is not None:
         payload["assigned_staff_name"] = assigned_staff_name
 
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
+
+    # 複数担当が来たときは、先頭1名を旧カラムにも入れる
+    if "assigned_staff_ids" in payload:
+        ids = payload["assigned_staff_ids"] or []
+        payload["assigned_staff_id"] = ids[0] if len(ids) > 0 else None
+
+    if "assigned_staff_names" in payload:
+        names = payload["assigned_staff_names"] or []
+        payload["assigned_staff_name"] = names[0] if len(names) > 0 else None
 
     res = (
         supabase.table("cleaning_tasks")
