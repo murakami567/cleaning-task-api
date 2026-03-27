@@ -1107,3 +1107,34 @@ def beds24_csv_sync(
         "cleaning_saved": cleaning_saved[:20],
         "skipped": skipped[:50],
     }
+import re
+
+def split_property_and_room(property_name_raw: str, unit_raw: str):
+    property_value = str(property_name_raw or "").strip()
+    unit_value = str(unit_raw or "").strip()
+
+    # まず通常の正規化
+    normalized_property = normalize_property_name_csv(property_value)
+
+    # 美野島 / 西中洲 / 冷泉 は property側に部屋番号が含まれるケースを吸収
+    for base_name in ["美野島", "西中洲", "冷泉"]:
+        if property_value.startswith(base_name):
+            rest = property_value[len(base_name):].strip()
+
+            # 例: 西中洲301 / 冷泉603 / 美野島A-101 など
+            if rest:
+                # unit が空なら property 側の残りを部屋として使う
+                if not unit_value:
+                    unit_value = rest
+                # property はベース名だけにする
+                normalized_property = base_name
+            break
+
+    # unit がまだ空で、propertyに末尾数字がついている場合の保険
+    if not unit_value:
+        m = re.match(r"^(FFFホテル|やなぎ橋|住吉|美野島|ブランシェ|ウィングス|玉井|ウーブル博多|いそのビル|ジェン|東光|グランデエス|エスコート|アトラス|薬院|ロイズ|ピット|県庁前|西中洲|冷泉|駅前|比恵)(.+)$", property_value)
+        if m:
+            normalized_property = m.group(1)
+            unit_value = m.group(2).strip()
+
+    return normalized_property, unit_value
