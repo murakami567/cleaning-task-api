@@ -7,6 +7,7 @@ from calendar import monthrange
 
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Body, HTTPException
 
 from app.db import supabase
 
@@ -107,6 +108,7 @@ def update_task(
     assigned_staff_ids: list[str] | None = Body(None),
     assigned_staff_names: list[str] | None = Body(None),
 
+    # 旧方式互換
     assigned_staff_id: str | None = Body(None),
     assigned_staff_name: str | None = Body(None),
 ):
@@ -124,7 +126,6 @@ def update_task(
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
 
-    # 旧方式も一応受ける
     if assigned_staff_id is not None:
         payload["assigned_staff_id"] = assigned_staff_id
 
@@ -134,7 +135,7 @@ def update_task(
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
 
-    # 複数担当が来たときは、先頭1名を旧カラムにも入れる
+    # 配列が来たら旧単数カラムにも先頭を入れる
     if "assigned_staff_ids" in payload:
         ids = payload["assigned_staff_ids"] or []
         payload["assigned_staff_id"] = ids[0] if len(ids) > 0 else None
