@@ -103,10 +103,8 @@ def update_task(
     task_id: str = Body(...),
     status: str | None = Body(None),
     note: str | None = Body(None),
-
     assigned_staff_ids: list[str] | None = Body(None),
     assigned_staff_names: list[str] | None = Body(None),
-
     assigned_staff_id: str | None = Body(None),
     assigned_staff_name: str | None = Body(None),
 ):
@@ -120,22 +118,17 @@ def update_task(
 
     if assigned_staff_ids is not None:
         payload["assigned_staff_ids"] = assigned_staff_ids
+        payload["assigned_staff_id"] = assigned_staff_ids[0] if assigned_staff_ids else None
 
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
+        payload["assigned_staff_name"] = assigned_staff_names[0] if assigned_staff_names else None
 
-    if assigned_staff_id is not None:
+    if assigned_staff_id is not None and "assigned_staff_id" not in payload:
         payload["assigned_staff_id"] = assigned_staff_id
 
-    if assigned_staff_name is not None:
+    if assigned_staff_name is not None and "assigned_staff_name" not in payload:
         payload["assigned_staff_name"] = assigned_staff_name
-
-    # 配列が来たら単数列にも先頭を入れる
-    if assigned_staff_ids is not None:
-        payload["assigned_staff_id"] = assigned_staff_ids[0] if len(assigned_staff_ids) > 0 else None
-
-    if assigned_staff_names is not None:
-        payload["assigned_staff_name"] = assigned_staff_names[0] if len(assigned_staff_names) > 0 else None
 
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
@@ -144,7 +137,7 @@ def update_task(
         res = (
             supabase.table("cleaning_tasks")
             .update(payload)
-            .eq("id", task_id)
+            .eq("booking_id", task_id)
             .execute()
         )
     except Exception as e:
