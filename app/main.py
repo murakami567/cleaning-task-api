@@ -102,16 +102,18 @@ def create_task(
 @app.post("/tasks/update")
 def update_task(
     task_id: str = Body(...),
+
     status: str | None = Body(None),
     note: str | None = Body(None),
 
     assigned_staff_ids: list[str] | None = Body(None),
     assigned_staff_names: list[str] | None = Body(None),
 
-    # 旧方式互換
+    # 旧互換
     assigned_staff_id: str | None = Body(None),
     assigned_staff_name: str | None = Body(None),
 ):
+
     payload = {}
 
     if status is not None:
@@ -126,35 +128,34 @@ def update_task(
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
 
+    # 旧方式
     if assigned_staff_id is not None:
         payload["assigned_staff_id"] = assigned_staff_id
 
     if assigned_staff_name is not None:
         payload["assigned_staff_name"] = assigned_staff_name
 
-    if not payload:
-        raise HTTPException(status_code=400, detail="no update fields")
+    # 複数担当が来たら先頭を単数列に保存
+    if assigned_staff_ids:
+        payload["assigned_staff_id"] = assigned_staff_ids[0]
 
-    # 配列が来たら旧単数カラムにも先頭を入れる
-    if "assigned_staff_ids" in payload:
-        ids = payload["assigned_staff_ids"] or []
-        payload["assigned_staff_id"] = ids[0] if len(ids) > 0 else None
+    if assigned_staff_names:
+        payload["assigned_staff_name"] = assigned_staff_names[0]
 
-    if "assigned_staff_names" in payload:
-        names = payload["assigned_staff_names"] or []
-        payload["assigned_staff_name"] = names[0] if len(names) > 0 else None
+    try:
+        res = (
+            supabase.table("cleaning_tasks")
+            .update(payload)
+            .eq("id", task_id)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    res = (
-        supabase.table("cleaning_tasks")
-        .update(payload)
-        .eq("id", task_id)
-        .execute()
-    )
-
-    if not res.data:
-        raise HTTPException(status_code=500, detail="task update failed")
-
-    return res.data[0]
+    return {
+        "ok": True,
+        "updated": payload
+    }
 
 
 # =========================================================
