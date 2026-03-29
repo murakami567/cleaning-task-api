@@ -118,11 +118,10 @@ def update_task(
 
     if assigned_staff_ids is not None:
         payload["assigned_staff_ids"] = assigned_staff_ids
-        payload["assigned_staff_id"] = assigned_staff_ids[0] if assigned_staff_ids else None
 
     if assigned_staff_names is not None:
-        payload["assigned_staff_names"] = assigned_staff_names
-        payload["assigned_staff_name"] = assigned_staff_names[0] if assigned_staff_names else None
+    payload["assigned_staff_names"] = assigned_staff_names
+    payload["assigned_staff_name"] = assigned_staff_names[0] if assigned_staff_names else None
 
     if assigned_staff_id is not None and "assigned_staff_id" not in payload:
         payload["assigned_staff_id"] = assigned_staff_id
