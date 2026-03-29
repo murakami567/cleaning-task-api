@@ -98,11 +98,9 @@ def create_task(
 
     return res.data[0]
 
-
 @app.post("/tasks/update")
 def update_task(
     task_id: str = Body(...),
-
     status: str | None = Body(None),
     note: str | None = Body(None),
 
@@ -112,7 +110,6 @@ def update_task(
     assigned_staff_id: str | None = Body(None),
     assigned_staff_name: str | None = Body(None),
 ):
-
     payload = {}
 
     if status is not None:
@@ -127,24 +124,38 @@ def update_task(
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
 
-    if assigned_staff_ids:
-        payload["assigned_staff_id"] = assigned_staff_ids[0]
+    if assigned_staff_id is not None:
+        payload["assigned_staff_id"] = assigned_staff_id
 
-    if assigned_staff_names:
-        payload["assigned_staff_name"] = assigned_staff_names[0]
+    if assigned_staff_name is not None:
+        payload["assigned_staff_name"] = assigned_staff_name
 
-    res = (
-        supabase.table("cleaning_tasks")
-        .update(payload)
-        .eq("booking_id", task_id)
-        .execute()
-    )
+    # 配列が来たら単数列にも先頭を入れる
+    if assigned_staff_ids is not None:
+        payload["assigned_staff_id"] = assigned_staff_ids[0] if len(assigned_staff_ids) > 0 else None
+
+    if assigned_staff_names is not None:
+        payload["assigned_staff_name"] = assigned_staff_names[0] if len(assigned_staff_names) > 0 else None
+
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    try:
+        res = (
+            supabase.table("cleaning_tasks")
+            .update(payload)
+            .eq("id", task_id)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"supabase update failed: {str(e)}")
 
     return {
         "ok": True,
-        "updated": payload
+        "task_id": task_id,
+        "updated": payload,
+        "data": res.data,
     }
-
 
 # =========================================================
 # 物件一覧 / 物件管理
