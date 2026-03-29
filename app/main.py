@@ -109,7 +109,6 @@ def update_task(
     assigned_staff_ids: list[str] | None = Body(None),
     assigned_staff_names: list[str] | None = Body(None),
 
-    # 旧互換
     assigned_staff_id: str | None = Body(None),
     assigned_staff_name: str | None = Body(None),
 ):
@@ -128,29 +127,18 @@ def update_task(
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
 
-    # 旧方式
-    if assigned_staff_id is not None:
-        payload["assigned_staff_id"] = assigned_staff_id
-
-    if assigned_staff_name is not None:
-        payload["assigned_staff_name"] = assigned_staff_name
-
-    # 複数担当が来たら先頭を単数列に保存
     if assigned_staff_ids:
         payload["assigned_staff_id"] = assigned_staff_ids[0]
 
     if assigned_staff_names:
         payload["assigned_staff_name"] = assigned_staff_names[0]
 
-    try:
-        res = (
-            supabase.table("cleaning_tasks")
-            .update(payload)
-            .eq("id", task_id)
-            .execute()
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    res = (
+        supabase.table("cleaning_tasks")
+        .update(payload)
+        .eq("booking_id", task_id)
+        .execute()
+    )
 
     return {
         "ok": True,
