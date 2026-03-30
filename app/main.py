@@ -164,8 +164,8 @@ def create_non_cleaning_task(
     category: str = Body("OTHER"),
     title: str = Body(...),
     deadline: str | None = Body(None),
-    assignee_id: str | None = Body(None),
-    assignee_name: str | None = Body(None),
+    assignee_ids: list[str] | None = Body(None),
+    assignee_names: list[str] | None = Body(None),
     checker_id: str | None = Body(None),
     checker_name: str | None = Body(None),
     note: str = Body(""),
@@ -176,8 +176,8 @@ def create_non_cleaning_task(
         "category": category,
         "title": title,
         "deadline": deadline,
-        "assignee_id": assignee_id,
-        "assignee_name": assignee_name,
+        "assignee_ids": assignee_ids or [],
+        "assignee_names": assignee_names or [],
         "checker_id": checker_id,
         "checker_name": checker_name,
         "note": note,
@@ -198,8 +198,8 @@ def update_non_cleaning_task(
     category: str | None = Body(None),
     title: str | None = Body(None),
     deadline: str | None = Body(None),
-    assignee_id: str | None = Body(None),
-    assignee_name: str | None = Body(None),
+    assignee_ids: list[str] | None = Body(None),
+    assignee_names: list[str] | None = Body(None),
     checker_id: str | None = Body(None),
     checker_name: str | None = Body(None),
     note: str | None = Body(None),
@@ -216,10 +216,10 @@ def update_non_cleaning_task(
         payload["title"] = title
     if deadline is not None:
         payload["deadline"] = deadline
-    if assignee_id is not None:
-        payload["assignee_id"] = assignee_id
-    if assignee_name is not None:
-        payload["assignee_name"] = assignee_name
+    if assignee_ids is not None:
+        payload["assignee_ids"] = assignee_ids
+    if assignee_names is not None:
+        payload["assignee_names"] = assignee_names
     if checker_id is not None:
         payload["checker_id"] = checker_id
     if checker_name is not None:
