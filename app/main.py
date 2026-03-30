@@ -147,6 +147,103 @@ def update_task(
         "data": res.data,
     }
 
+@app.get("/non-cleaning-tasks")
+def get_non_cleaning_tasks():
+    res = (
+        supabase.table("non_cleaning_tasks")
+        .select("*")
+        .order("task_date")
+        .execute()
+    )
+    return res.data
+
+@app.post("/non-cleaning-tasks/create")
+def create_non_cleaning_task(
+    task_date: str = Body(...),
+    status: str = Body("未着手"),
+    category: str = Body("OTHER"),
+    title: str = Body(...),
+    deadline: str | None = Body(None),
+    assignee_id: str | None = Body(None),
+    assignee_name: str | None = Body(None),
+    checker_id: str | None = Body(None),
+    checker_name: str | None = Body(None),
+    note: str = Body(""),
+):
+    payload = {
+        "task_date": task_date,
+        "status": status,
+        "category": category,
+        "title": title,
+        "deadline": deadline,
+        "assignee_id": assignee_id,
+        "assignee_name": assignee_name,
+        "checker_id": checker_id,
+        "checker_name": checker_name,
+        "note": note,
+    }
+
+    res = supabase.table("non_cleaning_tasks").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="non cleaning task creation failed")
+
+    return res.data[0]
+
+@app.post("/non-cleaning-tasks/update")
+def update_non_cleaning_task(
+    task_id: str = Body(...),
+    task_date: str | None = Body(None),
+    status: str | None = Body(None),
+    category: str | None = Body(None),
+    title: str | None = Body(None),
+    deadline: str | None = Body(None),
+    assignee_id: str | None = Body(None),
+    assignee_name: str | None = Body(None),
+    checker_id: str | None = Body(None),
+    checker_name: str | None = Body(None),
+    note: str | None = Body(None),
+):
+    payload = {}
+
+    if task_date is not None:
+        payload["task_date"] = task_date
+    if status is not None:
+        payload["status"] = status
+    if category is not None:
+        payload["category"] = category
+    if title is not None:
+        payload["title"] = title
+    if deadline is not None:
+        payload["deadline"] = deadline
+    if assignee_id is not None:
+        payload["assignee_id"] = assignee_id
+    if assignee_name is not None:
+        payload["assignee_name"] = assignee_name
+    if checker_id is not None:
+        payload["checker_id"] = checker_id
+    if checker_name is not None:
+        payload["checker_name"] = checker_name
+    if note is not None:
+        payload["note"] = note
+
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    res = (
+        supabase.table("non_cleaning_tasks")
+        .update(payload)
+        .eq("id", task_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="non cleaning task update failed")
+
+    return res.data[0]
+
+
+
 # =========================================================
 # 物件一覧 / 物件管理
 # =========================================================
