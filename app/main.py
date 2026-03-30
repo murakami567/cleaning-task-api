@@ -120,13 +120,11 @@ def update_task(
         payload["assigned_staff_ids"] = assigned_staff_ids
 
     if assigned_staff_names is not None:
-    payload["assigned_staff_names"] = assigned_staff_names
-    payload["assigned_staff_name"] = assigned_staff_names[0] if assigned_staff_names else None
+        payload["assigned_staff_names"] = assigned_staff_names
 
-    if assigned_staff_id is not None and "assigned_staff_id" not in payload:
-        payload["assigned_staff_id"] = assigned_staff_id
-
-    if assigned_staff_name is not None and "assigned_staff_name" not in payload:
+    # 単数列は一旦触らない
+    # 外部キー問題を避けるため、まずは配列列だけ保存する
+    if assigned_staff_name is not None:
         payload["assigned_staff_name"] = assigned_staff_name
 
     if not payload:
@@ -136,7 +134,7 @@ def update_task(
         res = (
             supabase.table("cleaning_tasks")
             .update(payload)
-            .eq("booking_id", task_id)
+            .eq("id", task_id)
             .execute()
         )
     except Exception as e:
