@@ -242,7 +242,21 @@ def update_non_cleaning_task(
 
     return res.data[0]
 
+@app.post("/non-cleaning-tasks/delete")
+def delete_non_cleaning_task(
+    task_id: str = Body(...),
+):
+    res = (
+        supabase.table("non_cleaning_tasks")
+        .delete()
+        .eq("id", task_id)
+        .execute()
+    )
 
+    return {
+        "ok": True,
+        "data": res.data,
+    }
 
 # =========================================================
 # 物件一覧 / 物件管理
