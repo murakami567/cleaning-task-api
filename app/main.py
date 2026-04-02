@@ -183,6 +183,17 @@ def create_non_cleaning_task(
         "note": note,
     }
 
+    # 旧単数列も互換で残す
+    if assignee_ids and len(assignee_ids) > 0:
+        payload["assignee_id"] = assignee_ids[0]
+    else:
+        payload["assignee_id"] = None
+
+    if assignee_names and len(assignee_names) > 0:
+        payload["assignee_name"] = assignee_names[0]
+    else:
+        payload["assignee_name"] = None
+
     res = supabase.table("non_cleaning_tasks").insert(payload).execute()
 
     if not res.data:
@@ -218,8 +229,10 @@ def update_non_cleaning_task(
         payload["deadline"] = deadline
     if assignee_ids is not None:
         payload["assignee_ids"] = assignee_ids
+        payload["assignee_id"] = assignee_ids[0] if len(assignee_ids) > 0 else None
     if assignee_names is not None:
         payload["assignee_names"] = assignee_names
+        payload["assignee_name"] = assignee_names[0] if len(assignee_names) > 0 else None
     if checker_id is not None:
         payload["checker_id"] = checker_id
     if checker_name is not None:
