@@ -1,9 +1,9 @@
 import csv
 import io
 import os
-import requests
 from datetime import date, datetime, timedelta
 
+import requests
 from fastapi import HTTPException
 
 from app.db import supabase
@@ -14,7 +14,15 @@ BEDS24_CSV_USERNAME = os.getenv("BEDS24_CSV_USERNAME", "")
 BEDS24_CSV_PASSWORD = os.getenv("BEDS24_CSV_PASSWORD", "")
 
 
-def format_jst_date_string(dt: date) -> str:
+PROPERTY_ORDER = [
+    "FFFホテル", "やなぎ橋", "住吉", "アクシオン美野島", "ブランシェ", "ウィングス", "美野島",
+        "玉井", "ウーブル博多", "いそのビル", "ジェン", "ルッシェ", "東光", "グランデエス",
+        "エスコート", "アトラス", "薬院", "ロイズ", "ピット", "県庁前",
+        "西中洲", "冷泉", "駅前モダン", "比恵モダン", "浄水"
+]
+
+
+def format_date_string(dt: date) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
@@ -69,41 +77,56 @@ def find_target_columns(header_row):
         if header in target_columns:
             target_columns[header] = i
 
-    required = [
-        "Title",
-        "Property",
-        "Unit",
-        "FirstNight",
-        "Check Out",
-        "Status",
-    ]
-
+    required = ["Title", "Property", "Unit", "FirstNight", "Check Out", "Status"]
     missing = [k for k in required if target_columns[k] == -1]
+
     if missing:
         raise HTTPException(status_code=500, detail=f"required csv columns missing: {', '.join(missing)}")
 
     return target_columns
 
 
-def split_property_and_room(property_raw, unit_raw):
-    property_raw = str(property_raw or "").strip()
-    unit_raw = str(unit_raw or "").strip()
+def normalize_property_name(property_raw: str) -> str:
+    raw = str(property_raw or "").strip()
 
-    property_list = [
-        "FFFホテル", "やなぎ橋", "住吉", "アクシオン美野島", "ブランシェ", "ウィングス", "美野島",
-        "玉井", "ウーブル博多", "いそのビル", "ジェン", "ルッシェ", "東光", "グランデエス",
-        "エスコート", "アトラス", "薬院", "ロイズ", "ピット", "県庁前",
-        "西中洲", "冷泉", "駅前モダン", "比恵モダン", "浄水"
-    ]
+    if raw.startswith("美野島"):
+        return "美野島"
+    if raw.startswith("西中洲"):
+        return "西中洲"
+    if raw.startswith("冷泉"):
+        return "冷泉"
 
-    for p in property_list:
-        if property_raw.startswith(p):
-            rest = property_raw.replace(p, "").strip()
-            if not unit_raw and rest:
-                unit_raw = rest
-            return p, unit_raw
+    for p in PROPERTY_ORDER:
+        if raw.startswith(p):
+            return p
 
-    return property_raw, unit_raw
+    return raw
+
+
+def split_property_and_room(property_raw: str, unit_raw: str):
+    raw_property = str(property_raw or "").strip()
+    raw_unit = str(unit_raw or "").strip()
+
+    normalized_property = normalize_property_name(raw_property)
+
+    room_name = raw_unit.strip()
+
+    if not room_name and raw_property.startswith(normalized_property):
+        rest = raw_property[len(normalized_property):].strip()
+        room_name = rest
+
+    return normalized_property, room_name
+
+
+def calc_gap_nights(checkout_date: str | None, next_checkin_date: str | None):
+    if not checkout_date or not next_checkin_date:
+        return 0
+    try:
+        d1 = datetime.fromisoformat(checkout_date).date()
+        d2 = datetime.fromisoformat(next_checkin_date).date()
+        return max((d2 - d1).days, 0)
+    except Exception:
+        return 0
 
 
 def calc_load_score(guest_count: int, gap_nights: int) -> int:
@@ -120,15 +143,13 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
         raise HTTPException(status_code=500, detail="BEDS24_CSV_USERNAME or BEDS24_CSV_PASSWORD is not set")
 
     today = date.today()
-
-    start_date_str = from_date if from_date and from_date != "string" else format_jst_date_string(today)
+    start_date_str = from_date if from_date and from_date != "string" else format_date_string(today)
 
     if to_date and to_date != "string":
         end_date_str = to_date
     else:
-        next_month_end = date(today.year, today.month, 1) + timedelta(days=62)
-        next_month_end = date(next_month_end.year, next_month_end.month, 1) - timedelta(days=1)
-        end_date_str = format_jst_date_string(next_month_end)
+        end_date = today + timedelta(days=60)
+        end_date_str = format_date_string(end_date)
 
     payload = {
         "username": BEDS24_CSV_USERNAME,
@@ -147,9 +168,17 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
 
     csv_rows = parse_csv_text(res.text)
     if not csv_rows:
-        return {"ok": True, "csv_row_count": 0, "cleaning_saved_count": 0}
+        return {
+            "ok": True,
+            "from": start_date_str,
+            "to": end_date_str,
+            "csv_row_count": 0,
+            "cleaning_saved_count": 0,
+            "skipped_count": 0,
+        }
 
     target_columns = find_target_columns(csv_rows[0])
+
     cleaning_saved = []
     skipped = []
 
@@ -181,8 +210,8 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 skipped.append({"reason": "missing checkout", "row_index": i})
                 continue
 
-            property_name_normalized, unit_normalized = split_property_and_room(property_name_raw, unit_raw)
-            room_key = f"{property_name_normalized}{unit_normalized}"
+            property_name, room_name = split_property_and_room(property_name_raw, unit_raw)
+            room_key = f"{property_name}{room_name}"
             booking_id = f"{property_name_raw}_{unit_raw}_{first_night_raw}_{check_out_raw}_{i}"
 
             try:
@@ -196,25 +225,26 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 child_count = 0
 
             guest_count = adult_count + child_count
-            gap_nights = 0
+            gap_nights = calc_gap_nights(checkout_date, checkin_date)
+            load_score = calc_load_score(guest_count, gap_nights)
 
             cleaning_payload = {
                 "booking_id": booking_id,
-                "property_name": property_name_normalized,
-                "room_name": unit_normalized,
+                "property_name": property_name,
+                "room_name": room_name,
                 "room_key": room_key,
                 "task_date": checkout_date,
                 "checkout_date": checkout_date,
                 "next_checkin_date": checkin_date,
                 "gap_nights": gap_nights,
                 "guest_count": guest_count,
-                "load_score": calc_load_score(guest_count, gap_nights),
+                "load_score": load_score,
                 "status": "未着手",
                 "note": "",
                 "source": "beds24_csv",
             }
 
-            cleaning_res = (
+            upsert_res = (
                 supabase.table("cleaning_tasks")
                 .upsert(cleaning_payload, on_conflict="booking_id")
                 .execute()
@@ -222,7 +252,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
 
             cleaning_saved.append({
                 "booking_id": booking_id,
-                "cleaning_count": len(cleaning_res.data or []),
+                "count": len(upsert_res.data or []),
             })
 
         except Exception as e:
