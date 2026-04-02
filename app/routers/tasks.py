@@ -287,3 +287,36 @@ def get_shifts(shift_date: str | None = None):
 
     res = query.execute()
     return res.data or []
+
+@router.get("/shift-board")
+def get_shift_board(year: int, month: int):
+    from datetime import date
+
+    start_date = date(year, month, 1).isoformat()
+
+    if month == 12:
+        end_date = date(year + 1, 1, 1).isoformat()
+    else:
+        end_date = date(year, month + 1, 1).isoformat()
+
+    staff_res = (
+        supabase.table("staff_members")
+        .select("*")
+        .order("sort_order")
+        .order("staff_name")
+        .execute()
+    )
+
+    day_res = (
+        supabase.table("shift_days")
+        .select("*, shift_entries(*, staff_members(*))")
+        .gte("shift_date", start_date)
+        .lt("shift_date", end_date)
+        .order("shift_date")
+        .execute()
+    )
+
+    return {
+        "staffs": staff_res.data or [],
+        "days": day_res.data or [],
+    }
