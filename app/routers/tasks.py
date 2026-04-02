@@ -459,3 +459,114 @@ def upsert_shift_entry(
         raise HTTPException(status_code=500, detail="shift entry upsert failed")
 
     return res.data[0]
+
+# =========================================================
+# 新規オープン進捗
+# =========================================================
+@router.get("/openings")
+def get_openings():
+    res = (
+        supabase.table("opening_projects")
+        .select("*")
+        .order("due_date")
+        .execute()
+    )
+    return res.data or []
+
+
+@router.post("/openings/create")
+def create_opening(
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    room_name: str = Body(""),
+    title: str = Body(...),
+    owner_name: str = Body(""),
+    due_date: str | None = Body(None),
+    status: str = Body("未着手"),
+    priority: str = Body("中"),
+    progress: int = Body(0),
+    memo: str = Body(""),
+):
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "room_name": room_name,
+        "title": title,
+        "owner_name": owner_name,
+        "due_date": due_date,
+        "status": status,
+        "priority": priority,
+        "progress": progress,
+        "memo": memo,
+    }
+
+    res = supabase.table("opening_projects").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="opening creation failed")
+
+    return res.data[0]
+
+
+@router.post("/openings/update")
+def update_opening(
+    opening_id: str = Body(...),
+    property_id: str | None = Body(None),
+    property_name: str | None = Body(None),
+    room_name: str | None = Body(None),
+    title: str | None = Body(None),
+    owner_name: str | None = Body(None),
+    due_date: str | None = Body(None),
+    status: str | None = Body(None),
+    priority: str | None = Body(None),
+    progress: int | None = Body(None),
+    memo: str | None = Body(None),
+):
+    payload = {}
+
+    if property_id is not None:
+        payload["property_id"] = property_id
+    if property_name is not None:
+        payload["property_name"] = property_name
+    if room_name is not None:
+        payload["room_name"] = room_name
+    if title is not None:
+        payload["title"] = title
+    if owner_name is not None:
+        payload["owner_name"] = owner_name
+    if due_date is not None:
+        payload["due_date"] = due_date
+    if status is not None:
+        payload["status"] = status
+    if priority is not None:
+        payload["priority"] = priority
+    if progress is not None:
+        payload["progress"] = progress
+    if memo is not None:
+        payload["memo"] = memo
+
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    res = (
+        supabase.table("opening_projects")
+        .update(payload)
+        .eq("id", opening_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="opening update failed")
+
+    return res.data[0]
+
+
+@router.post("/openings/delete")
+def delete_opening(opening_id: str = Body(...)):
+    res = (
+        supabase.table("opening_projects")
+        .delete()
+        .eq("id", opening_id)
+        .execute()
+    )
+    return {"ok": True, "data": res.data}
