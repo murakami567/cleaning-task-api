@@ -286,4 +286,4 @@ def get_shifts(shift_date: str | None = None):
         query = query.eq("shift_date", shift_date)
 
     res = query.execute()
-    return res.data
+    return res.data or []
