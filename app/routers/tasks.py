@@ -277,6 +277,21 @@ def get_rooms(property_id: str | None = None):
 # =========================================================
 # シフト管理
 # =========================================================
+
+@router.get("/shifts")
+def get_shifts(shift_date: str | None = None):
+    query = (
+        supabase.table("shift_days")
+        .select("*, shift_entries(*, staff_members(*))")
+        .order("shift_date")
+    )
+
+    if shift_date:
+        query = query.eq("shift_date", shift_date)
+
+    res = query.execute()
+    return res.data or []
+
 @router.get("/staffs")
 def get_staffs():
     res = (
