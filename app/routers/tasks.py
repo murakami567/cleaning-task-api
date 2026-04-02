@@ -570,3 +570,114 @@ def delete_opening(opening_id: str = Body(...)):
         .execute()
     )
     return {"ok": True, "data": res.data}
+
+# =========================================================
+# 設備管理
+# =========================================================
+@router.get("/facilities")
+def get_facilities():
+    res = (
+        supabase.table("facility_tasks")
+        .select("*")
+        .order("due_date")
+        .execute()
+    )
+    return res.data or []
+
+
+@router.post("/facilities/create")
+def create_facility(
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    room_name: str = Body(""),
+    title: str = Body(...),
+    owner_name: str = Body(""),
+    due_date: str | None = Body(None),
+    status: str = Body("未着手"),
+    priority: str = Body("中"),
+    progress: int = Body(0),
+    memo: str = Body(""),
+):
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "room_name": room_name,
+        "title": title,
+        "owner_name": owner_name,
+        "due_date": due_date,
+        "status": status,
+        "priority": priority,
+        "progress": progress,
+        "memo": memo,
+    }
+
+    res = supabase.table("facility_tasks").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="facility creation failed")
+
+    return res.data[0]
+
+
+@router.post("/facilities/update")
+def update_facility(
+    facility_id: str = Body(...),
+    property_id: str | None = Body(None),
+    property_name: str | None = Body(None),
+    room_name: str | None = Body(None),
+    title: str | None = Body(None),
+    owner_name: str | None = Body(None),
+    due_date: str | None = Body(None),
+    status: str | None = Body(None),
+    priority: str | None = Body(None),
+    progress: int | None = Body(None),
+    memo: str | None = Body(None),
+):
+    payload = {}
+
+    if property_id is not None:
+        payload["property_id"] = property_id
+    if property_name is not None:
+        payload["property_name"] = property_name
+    if room_name is not None:
+        payload["room_name"] = room_name
+    if title is not None:
+        payload["title"] = title
+    if owner_name is not None:
+        payload["owner_name"] = owner_name
+    if due_date is not None:
+        payload["due_date"] = due_date
+    if status is not None:
+        payload["status"] = status
+    if priority is not None:
+        payload["priority"] = priority
+    if progress is not None:
+        payload["progress"] = progress
+    if memo is not None:
+        payload["memo"] = memo
+
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    res = (
+        supabase.table("facility_tasks")
+        .update(payload)
+        .eq("id", facility_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="facility update failed")
+
+    return res.data[0]
+
+
+@router.post("/facilities/delete")
+def delete_facility(facility_id: str = Body(...)):
+    res = (
+        supabase.table("facility_tasks")
+        .delete()
+        .eq("id", facility_id)
+        .execute()
+    )
+    return {"ok": True, "data": res.data}
