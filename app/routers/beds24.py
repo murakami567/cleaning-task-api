@@ -14,11 +14,10 @@ def beds24_csv_sync(
     to_date: str | None = Body(default=None),
     x_api_key: str | None = Header(default=None),
 ):
-
     if SYNC_API_KEY and x_api_key != SYNC_API_KEY:
         raise HTTPException(status_code=401, detail="unauthorized")
 
     return beds24_csv_sync_service(
         from_date=from_date,
-        to_date=to_date
+        to_date=to_date,
     )
