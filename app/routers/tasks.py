@@ -274,19 +274,20 @@ def get_rooms(property_id: str | None = None):
     return res.data
 
 
-@router.get("/shifts")
-def get_shifts(shift_date: str | None = None):
-    query = (
-        supabase.table("shift_days")
-        .select("*, shift_entries(*, staff_members(*))")
-        .order("shift_date")
+# =========================================================
+# シフト管理
+# =========================================================
+@router.get("/staffs")
+def get_staffs():
+    res = (
+        supabase.table("staff_members")
+        .select("*")
+        .order("sort_order")
+        .order("staff_name")
+        .execute()
     )
-
-    if shift_date:
-        query = query.eq("shift_date", shift_date)
-
-    res = query.execute()
     return res.data or []
+
 
 @router.get("/shift-board")
 def get_shift_board(year: int, month: int):
@@ -320,3 +321,126 @@ def get_shift_board(year: int, month: int):
         "staffs": staff_res.data or [],
         "days": day_res.data or [],
     }
+
+
+@router.post("/shifts/create_day")
+def create_shift_day(
+    shift_date: str = Body(...),
+    note: str | None = Body(None),
+):
+    # 既存確認
+    existing = (
+        supabase.table("shift_days")
+        .select("*")
+        .eq("shift_date", shift_date)
+        .execute()
+    )
+
+    if existing.data and len(existing.data) > 0:
+        day = existing.data[0]
+        day["shift_entries"] = day.get("shift_entries", []) if isinstance(day.get("shift_entries"), list) else []
+        return day
+
+    payload = {
+        "shift_date": shift_date,
+        "note": note or "",
+    }
+
+    res = (
+        supabase.table("shift_days")
+        .insert(payload)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="shift day creation failed")
+
+    created = res.data[0]
+    created["shift_entries"] = []
+    return created
+
+
+@router.post("/shifts/get_or_create_day")
+def get_or_create_shift_day(
+    shift_date: str = Body(...),
+    note: str | None = Body(None),
+):
+    existing = (
+        supabase.table("shift_days")
+        .select("*, shift_entries(*, staff_members(*))")
+        .eq("shift_date", shift_date)
+        .execute()
+    )
+
+    if existing.data and len(existing.data) > 0:
+        day = existing.data[0]
+        day["shift_entries"] = day.get("shift_entries", []) if isinstance(day.get("shift_entries"), list) else []
+        return day
+
+    payload = {
+        "shift_date": shift_date,
+        "note": note or "",
+    }
+
+    created_res = (
+        supabase.table("shift_days")
+        .insert(payload)
+        .execute()
+    )
+
+    if not created_res.data:
+        raise HTTPException(status_code=500, detail="get_or_create_day failed")
+
+    created = created_res.data[0]
+    created["shift_entries"] = []
+    return created
+
+
+@router.post("/shifts/upsert_entry")
+def upsert_shift_entry(
+    shift_day_id: str = Body(...),
+    staff_id: str = Body(...),
+    status: str = Body(...),
+    start_time: str | None = Body(None),
+    end_time: str | None = Body(None),
+    assigned_area: str | None = Body(None),
+    note: str | None = Body(None),
+):
+    # 既存確認
+    existing = (
+        supabase.table("shift_entries")
+        .select("*")
+        .eq("shift_day_id", shift_day_id)
+        .eq("staff_id", staff_id)
+        .execute()
+    )
+
+    payload = {
+        "shift_day_id": shift_day_id,
+        "staff_id": staff_id,
+        "status": status,
+        "start_time": start_time,
+        "end_time": end_time,
+        "assigned_area": assigned_area or "",
+        "note": note or "",
+    }
+
+    if existing.data and len(existing.data) > 0:
+        entry_id = existing.data[0]["id"]
+        res = (
+            supabase.table("shift_entries")
+            .update(payload)
+            .eq("id", entry_id)
+            .execute()
+        )
+    else:
+        res = (
+            supabase.table("shift_entries")
+            .insert(payload)
+            .execute()
+        )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="shift entry upsert failed")
+
+    return res.data[0]
