@@ -182,81 +182,123 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
     cleaning_saved = []
     skipped = []
 
-    for i in range(1, len(csv_rows)):
-        row = csv_rows[i]
+    from collections import defaultdict
+
+records = []
+
+for i in range(1, len(csv_rows)):
+    row = csv_rows[i]
+
+    try:
+        title = safe_get(row, target_columns["Title"])
+        status = safe_get(row, target_columns["Status"])
+        property_name_raw = safe_get(row, target_columns["Property"])
+        unit_raw = safe_get(row, target_columns["Unit"])
+        first_night_raw = safe_get(row, target_columns["FirstNight"])
+        check_out_raw = safe_get(row, target_columns["Check Out"])
+        adult_raw = safe_get(row, target_columns["Adult"])
+        child_raw = safe_get(row, target_columns["Child"])
+
+        if status == "Cancelled":
+            skipped.append({"reason": "cancelled", "row_index": i})
+            continue
+
+        if "ブロック" in title or "予備部屋" in title:
+            skipped.append({"reason": "blocked", "row_index": i})
+            continue
+
+        checkin_date = parse_beds24_date(first_night_raw)
+        checkout_date = parse_beds24_date(check_out_raw)
+
+        if not checkin_date or not checkout_date:
+            skipped.append({"reason": "missing date", "row_index": i})
+            continue
+
+        property_name, room_name = split_property_and_room(property_name_raw, unit_raw)
+        room_key = f"{property_name}{room_name}"
+
+        booking_id = f"{property_name_raw}_{unit_raw}_{first_night_raw}_{check_out_raw}_{i}"
 
         try:
-            title = safe_get(row, target_columns["Title"])
-            status = safe_get(row, target_columns["Status"])
-            property_name_raw = safe_get(row, target_columns["Property"])
-            unit_raw = safe_get(row, target_columns["Unit"])
-            first_night_raw = safe_get(row, target_columns["FirstNight"])
-            check_out_raw = safe_get(row, target_columns["Check Out"])
-            adult_raw = safe_get(row, target_columns["Adult"])
-            child_raw = safe_get(row, target_columns["Child"])
+            adult_count = int(adult_raw or 0)
+        except Exception:
+            adult_count = 0
 
-            if status == "Cancelled":
-                skipped.append({"reason": "cancelled", "row_index": i})
-                continue
+        try:
+            child_count = int(child_raw or 0)
+        except Exception:
+            child_count = 0
 
-            if "ブロック" in title or "予備部屋" in title:
-                skipped.append({"reason": "blocked", "row_index": i})
-                continue
+        guest_count = adult_count + child_count
 
-            checkin_date = parse_beds24_date(first_night_raw)
-            checkout_date = parse_beds24_date(check_out_raw)
+        records.append({
+            "booking_id": booking_id,
+            "property_name": property_name,
+            "room_name": room_name,
+            "room_key": room_key,
+            "checkin_date": checkin_date,
+            "checkout_date": checkout_date,
+            "guest_count": guest_count,
+        })
 
-            if not checkout_date:
-                skipped.append({"reason": "missing checkout", "row_index": i})
-                continue
+    except Exception as e:
+        skipped.append({
+            "reason": f"row process error: {str(e)}",
+            "row_index": i,
+        })
 
-            property_name, room_name = split_property_and_room(property_name_raw, unit_raw)
-            room_key = f"{property_name}{room_name}"
-            booking_id = f"{property_name_raw}_{unit_raw}_{first_night_raw}_{check_out_raw}_{i}"
+grouped = defaultdict(list)
 
-            try:
-                adult_count = int(adult_raw or 0)
-            except Exception:
-                adult_count = 0
+for rec in records:
+    grouped[rec["room_key"]].append(rec)
 
-            try:
-                child_count = int(child_raw or 0)
-            except Exception:
-                child_count = 0
+final_records = []
 
-            guest_count = adult_count + child_count
-            gap_nights = calc_gap_nights(checkout_date, checkin_date)
-            load_score = calc_load_score(guest_count, gap_nights)
+for room_key, room_records in grouped.items():
+    room_records.sort(key=lambda x: (x["checkin_date"], x["checkout_date"]))
 
-            cleaning_payload = {
-                "booking_id": booking_id,
-                "property_name": property_name,
-                "room_name": room_name,
-                "room_key": room_key,
-                "task_date": checkout_date,
-                "checkout_date": checkout_date,
-                "next_checkin_date": checkin_date,
-                "gap_nights": gap_nights,
-                "guest_count": guest_count,
-                "load_score": load_score,
-                "status": "未着手",
-                "note": "",
-                "source": "beds24_csv",
-            }
+    for idx, rec in enumerate(room_records):
+        next_checkin_date = None
+        if idx + 1 < len(room_records):
+            next_checkin_date = room_records[idx + 1]["checkin_date"]
 
-            upsert_res = (
-                supabase.table("cleaning_tasks")
-                .upsert(cleaning_payload, on_conflict="booking_id")
-                .execute()
-            )
+        gap_nights = calc_gap_nights(rec["checkout_date"], next_checkin_date)
+        load_score = calc_load_score(rec["guest_count"], gap_nights)
 
-            cleaning_saved.append({
-                "booking_id": booking_id,
-                "count": len(upsert_res.data or []),
-            })
+        final_records.append({
+            "booking_id": rec["booking_id"],
+            "property_name": rec["property_name"],
+            "room_name": rec["room_name"],
+            "room_key": rec["room_key"],
+            "task_date": rec["checkout_date"],
+            "checkout_date": rec["checkout_date"],
+            "next_checkin_date": next_checkin_date,
+            "gap_nights": gap_nights,
+            "guest_count": rec["guest_count"],
+            "load_score": load_score,
+            "status": "未着手",
+            "note": "",
+            "source": "beds24_csv",
+        })
 
-        except Exception as e:
-            skipped.append({"reason": f"row process error: {str(e)}", "row_index": i})
+for payload in final_records:
+    try:
+        upsert_res = (
+            supabase.table("cleaning_tasks")
+            .upsert(payload, on_conflict="booking_id")
+            .execute()
+        )
+
+        cleaning_saved.append({
+            "booking_id": payload["booking_id"],
+            "count": len(upsert_res.data or []),
+        })
+
+    except Exception as e:
+        skipped.append({
+            "reason": f"upsert error: {str(e)}",
+            "booking_id": payload["booking_id"],
+        })
 
     return {
         "ok": True,
