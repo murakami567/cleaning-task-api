@@ -303,6 +303,55 @@ def get_staffs():
     )
     return res.data or []
 
+# =========================================================
+# スタッフ保存
+# =========================================================
+
+@router.post("/staffs/upsert")
+def upsert_staff(
+    staff_id: str | None = Body(None),
+    staff_code: str = Body(...),
+    staff_name: str = Body(...),
+    role: str = Body("staff"),
+    sort_order: int = Body(999),
+    is_active: bool = Body(True),
+    note: str = Body(""),
+    password: str | None = Body(None),
+):
+
+    payload = {
+        "staff_code": staff_code,
+        "staff_name": staff_name,
+        "role": role,
+        "sort_order": sort_order,
+        "is_active": is_active,
+        "note": note
+    }
+
+    if password is not None:
+        payload["password"] = password
+
+    # 更新
+    if staff_id:
+        res = (
+            supabase.table("staff_members")
+            .update(payload)
+            .eq("id", staff_id)
+            .execute()
+        )
+
+    # 新規
+    else:
+        res = (
+            supabase.table("staff_members")
+            .insert(payload)
+            .execute()
+        )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="staff save failed")
+
+    return res.data[0]
 
 @router.get("/shift-board")
 def get_shift_board(year: int, month: int):
