@@ -16,9 +16,10 @@ class LoginRequest(BaseModel):
 def login(payload: LoginRequest):
     res = (
         supabase
-        .table("users")
+        .table("staff_members")
         .select("*")
-        .eq("login_id", payload.login_id)
+        .eq("staff_code", payload.login_id)
+        .eq("is_active", True)
         .limit(1)
         .execute()
     )
@@ -40,8 +41,8 @@ def login(payload: LoginRequest):
         "access_token": access_token,
         "user": {
             "id": user.get("id"),
-            "name": user.get("name"),
-            "login_id": user.get("login_id"),
+            "name": user.get("staff_name"),
+            "login_id": user.get("staff_code"),
             "role": user.get("role"),
         },
     }
