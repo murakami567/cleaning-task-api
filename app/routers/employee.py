@@ -13,8 +13,8 @@ router = APIRouter(prefix="/api/employee", tags=["employee"])
 def get_me(user_id: str = Depends(get_current_user_id)):
     res = (
         supabase
-        .table("users")
-        .select("id, name, login_id, role, assigned_properties")
+        .table("staff_members")
+        .select("id, staff_name, staff_code, role")
         .eq("id", user_id)
         .limit(1)
         .execute()
@@ -23,8 +23,16 @@ def get_me(user_id: str = Depends(get_current_user_id)):
     if not res.data:
         return {"user": None}
 
-    return {"user": res.data[0]}
+    row = res.data[0]
 
+    return {
+        "user": {
+            "id": row.get("id"),
+            "name": row.get("staff_name"),
+            "login_id": row.get("staff_code"),
+            "role": row.get("role"),
+        }
+    }
 
 @router.get("/home")
 def get_home(user_id: str = Depends(get_current_user_id)):
