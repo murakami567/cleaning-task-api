@@ -662,3 +662,61 @@ def delete_facility(facility_id: str = Body(...)):
         return {"ok": True, "data": res.data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"facility delete failed: {str(e)}")
+
+# =========================================================
+# 社員アプリ
+# =========================================================
+
+@router.get("/employee/home")
+def employee_home(staff_id: str):
+    today_tasks = (
+        supabase.table("cleaning_tasks")
+        .select("*")
+        .contains("assigned_staff_ids", [staff_id])
+        .execute()
+    )
+
+    return {
+        "todayTaskCount": len(today_tasks.data or []),
+        "upcomingTaskCount": 0,
+        "todayScheduleCount": 0,
+        "unreadNoticeCount": 0
+    }
+
+
+@router.get("/employee/tasks")
+def employee_tasks(staff_id: str):
+
+    res = (
+        supabase.table("cleaning_tasks")
+        .select("*")
+        .contains("assigned_staff_ids", [staff_id])
+        .order("task_date")
+        .execute()
+    )
+
+    return res.data or []
+
+
+@router.get("/employee/schedule")
+def employee_schedule(staff_id: str):
+
+    res = (
+        supabase.table("shift_entries")
+        .select("*, shift_days(*)")
+        .eq("staff_id", staff_id)
+        .execute()
+    )
+
+    return res.data or []
+
+
+@router.post("/employee/worklog")
+def employee_worklog(payload: dict = Body(...)):
+
+    res = supabase.table("worklogs").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="worklog insert failed")
+
+    return res.data[0]
