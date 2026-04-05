@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers.tasks import router as tasks_router
 from app.routers.beds24 import router as beds24_router
 
-# 追加
 from app.routers.auth import router as auth_router
 from app.routers.employee import router as employee_router
 
@@ -15,6 +14,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://cleaning-task-admin.onrender.com",
+        "https://cleaning-task-gusk.onrender.com",  # ←追加
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
@@ -28,10 +28,7 @@ def root():
     return {"status": "ok"}
 
 
-# 既存
 app.include_router(tasks_router)
 app.include_router(beds24_router)
-
-# 追加
 app.include_router(auth_router)
 app.include_router(employee_router)
