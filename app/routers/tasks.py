@@ -735,7 +735,11 @@ def employee_home(staff_id: str):
 
 @router.get("/employee/tasks")
 def employee_tasks(staff_id: str):
-    res = (
+
+    # ===============================
+    # 清掃タスク
+    # ===============================
+    cleaning_res = (
         supabase.table("cleaning_tasks")
         .select("*")
         .contains("assigned_staff_ids", [staff_id])
@@ -743,9 +747,37 @@ def employee_tasks(staff_id: str):
         .execute()
     )
 
-    rows = res.data or []
+    # ===============================
+    # チェックタスク
+    # ===============================
+    check_res = (
+        supabase.table("cleaning_tasks")
+        .select("*")
+        .eq("checker_id", staff_id)
+        .order("task_date")
+        .execute()
+    )
 
+    # ===============================
+    # その他タスク
+    # ===============================
+    other_res = (
+        supabase.table("non_cleaning_tasks")
+        .select("*")
+        .contains("assignee_ids", [staff_id])
+        .order("task_date")
+        .execute()
+    )
+
+    cleaning_rows = cleaning_res.data or []
+    check_rows = check_res.data or []
+    other_rows = other_res.data or []
+
+    # ===============================
+    # タオル計算
+    # ===============================
     def calc_towel_count(property_name, next_guest_count, next_stay_nights):
+
         if property_name in ["FFFホテル", "やなぎ橋"]:
             return ""
 
@@ -760,36 +792,78 @@ def employee_tasks(staff_id: str):
         elif nights >= 3:
             return guests * 2
         else:
-            return guests * 1
+            return guests
 
-    tasks = []
-    for row in rows:
-        tasks.append({
+    cleaning_tasks = []
+    for row in cleaning_rows:
+
+        cleaning_tasks.append({
             "id": row.get("id"),
-            "title": "清掃タスク",
-            "propertyName": row.get("property_name") or "",
-            "roomName": row.get("room_name") or "",
-            "dueDate": row.get("task_date") or "",
-            "status": row.get("status") or "pending",
-            "note": row.get("note") or "",
+            "type": "cleaning",
+            "propertyName": row.get("property_name"),
+            "roomName": row.get("room_name"),
+            "date": row.get("task_date"),
+            "deadline": row.get("next_checkin_date"),
+            "status": row.get("status"),
+            "note": row.get("note"),
             "assigneeName": (
                 row.get("assigned_staff_names", [""])[0]
                 if isinstance(row.get("assigned_staff_names"), list) and row.get("assigned_staff_names")
-                else row.get("assigned_staff_name") or ""
+                else row.get("assigned_staff_name")
             ),
-            "checkerName": row.get("checker_name") or "",
-            "date": row.get("task_date") or "",
-            "deadline": row.get("next_checkin_date") or "",
-            "rateCi": row.get("early_checkin_fee") or "",
-            "rateCo": row.get("late_checkout_fee") or "",
+            "checkerName": row.get("checker_name"),
             "towelCount": calc_towel_count(
                 row.get("property_name"),
                 row.get("next_guest_count"),
-                row.get("next_stay_nights"),
-            ),
+                row.get("next_stay_nights")
+            )
         })
 
-    return {"tasks": tasks}
+    # ===============================
+    # チェックタスク
+    # ===============================
+    check_tasks = []
+    for row in check_rows:
+
+        check_tasks.append({
+            "id": row.get("id"),
+            "type": "check",
+            "propertyName": row.get("property_name"),
+            "roomName": row.get("room_name"),
+            "date": row.get("task_date"),
+            "deadline": row.get("next_checkin_date"),
+            "status": row.get("status"),
+            "checkerName": row.get("checker_name"),
+            "note": row.get("note"),
+        })
+
+    # ===============================
+    # その他タスク
+    # ===============================
+    other_tasks = []
+    for row in other_rows:
+
+        other_tasks.append({
+            "id": row.get("id"),
+            "type": "other",
+            "title": row.get("title"),
+            "date": row.get("task_date"),
+            "deadline": row.get("deadline"),
+            "status": row.get("status"),
+            "assigneeName": (
+                row.get("assignee_names", [""])[0]
+                if isinstance(row.get("assignee_names"), list) and row.get("assignee_names")
+                else row.get("assignee_name")
+            ),
+            "checkerName": row.get("checker_name"),
+            "note": row.get("note"),
+        })
+
+    return {
+        "cleaningTasks": cleaning_tasks,
+        "checkTasks": check_tasks,
+        "otherTasks": other_tasks
+    }
 
 @router.get("/employee/schedule")
 def employee_schedule(staff_id: str):
