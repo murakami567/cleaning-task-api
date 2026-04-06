@@ -34,6 +34,7 @@ def get_me(user_id: str = Depends(get_current_user_id)):
         }
     }
 
+
 @router.get("/home")
 def get_home(user_id: str = Depends(get_current_user_id)):
     today = date.today().isoformat()
@@ -88,7 +89,20 @@ def get_home(user_id: str = Depends(get_current_user_id)):
 
 @router.get("/tasks")
 def get_tasks(user_id: str = Depends(get_current_user_id)):
-    res = (
+    staff_res = (
+        supabase
+        .table("staff_members")
+        .select("id, staff_name")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+    )
+
+    staff_name = ""
+    if staff_res.data:
+        staff_name = staff_res.data[0].get("staff_name") or ""
+
+    cleaning_res = (
         supabase
         .table("cleaning_tasks")
         .select("*")
@@ -97,30 +111,42 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
         .execute()
     )
 
-    tasks = []
-    for row in res.data or []:
-        tasks.append({
-    "id": row.get("id"),
-    "title": f"清掃タスク {row.get('property_name', '')}",
-    "propertyName": row.get("property_name", ""),
-    "roomName": row.get("room_name", ""),
-    "dueDate": row.get("task_date", ""),
-    "status": normalize_task_status(row.get("status")),
-    "note": row.get("note", ""),
+    check_query = (
+        supabase
+        .table("cleaning_tasks")
+        .select("*")
+        .order("task_date")
+    )
 
-    "assigneeName": row.get("assigned_staff_name", ""),
-    "checkerName": row.get("checker_name", ""),
-    "date": row.get("task_date", ""),
-    "deadline": row.get("next_checkin_date", ""),
-    "rateCi": row.get("early_checkin_fee"),
-    "rateCo": row.get("late_checkout_fee"),
+    if staff_name:
+        check_query = check_query.or_(f"checker_id.eq.{user_id},checker_name.eq.{staff_name}")
+    else:
+        check_query = check_query.eq("checker_id", user_id)
 
-    # ★タオル計算用
-    "next_guest_count": row.get("next_guest_count", 0),
-    "next_stay_nights": row.get("next_stay_nights", 0),
-})
+    check_res = check_query.execute()
 
-    return {"tasks": tasks}
+    other_res = (
+        supabase
+        .table("non_cleaning_tasks")
+        .select("*")
+        .contains("assignee_ids", [user_id])
+        .order("task_date")
+        .execute()
+    )
+
+    cleaning_tasks = [map_cleaning_task(row, "cleaning") for row in (cleaning_res.data or [])]
+    check_tasks = [map_cleaning_task(row, "check") for row in (check_res.data or [])]
+    other_tasks = [map_other_task(row) for row in (other_res.data or [])]
+
+    return {
+        "otherTasks": other_tasks,
+        "cleaningTasks": cleaning_tasks,
+        "checkTasks": check_tasks,
+        "summary": {
+            "cleaningTodayCount": count_today(cleaning_tasks),
+            "checkTodayCount": count_today(check_tasks),
+        },
+    }
 
 
 @router.get("/schedule")
@@ -218,6 +244,78 @@ def update_password(
         raise HTTPException(status_code=500, detail="パスワード変更に失敗しました。")
 
     return {"message": "パスワードを変更しました。"}
+
+
+def map_cleaning_task(row: dict[str, Any], task_kind: str):
+    property_name = row.get("property_name") or ""
+    room_name = row.get("room_name") or ""
+    next_guest_count = row.get("next_guest_count") or 0
+    next_stay_nights = row.get("next_stay_nights") or 0
+
+    return {
+        "id": row.get("id"),
+        "taskKind": task_kind,
+        "title": f"{'チェックタスク' if task_kind == 'check' else '清掃タスク'} {property_name}",
+        "propertyName": property_name,
+        "roomName": room_name,
+        "status": normalize_task_status(row.get("status")),
+        "date": row.get("task_date") or "",
+        "deadline": row.get("next_checkin_date") or row.get("task_date") or "",
+        "dueDate": row.get("task_date") or "",
+        "note": row.get("note") or "",
+        "assigneeName": first_list_value(row.get("assigned_staff_names")) or row.get("assigned_staff_name") or "",
+        "checkerName": row.get("checker_name") or "",
+        "rateCi": row.get("early_checkin_fee") or "",
+        "rateCo": row.get("late_checkout_fee") or "",
+        "towelCount": calc_towel_display(property_name, next_guest_count, next_stay_nights),
+    }
+
+
+def map_other_task(row: dict[str, Any]):
+    return {
+        "id": row.get("id"),
+        "taskKind": "other",
+        "title": row.get("title") or "その他タスク",
+        "propertyName": "",
+        "roomName": "",
+        "status": normalize_task_status(row.get("status")),
+        "date": row.get("task_date") or "",
+        "deadline": row.get("deadline") or row.get("task_date") or "",
+        "dueDate": row.get("task_date") or "",
+        "note": row.get("note") or "",
+        "assigneeName": first_list_value(row.get("assignee_names")) or row.get("assignee_name") or "",
+        "checkerName": row.get("checker_name") or "",
+        "rateCi": "",
+        "rateCo": "",
+        "towelCount": "",
+    }
+
+
+def first_list_value(value: Any):
+    if isinstance(value, list) and len(value) > 0:
+        return value[0]
+    return ""
+
+
+def calc_towel_display(property_name: str, next_guest_count: int, next_stay_nights: int):
+    if property_name in ["FFFホテル", "やなぎ橋"]:
+        return ""
+
+    guests = int(next_guest_count or 0)
+    nights = int(next_stay_nights or 0)
+
+    if guests <= 0 or nights <= 0:
+        return "-"
+    if nights >= 8:
+        return guests * 3
+    if nights >= 3:
+        return guests * 2
+    return guests
+
+
+def count_today(tasks: list[dict[str, Any]]):
+    today = date.today().isoformat()
+    return len([t for t in tasks if t.get("date") == today])
 
 
 def normalize_task_status(status: str | None) -> str:
