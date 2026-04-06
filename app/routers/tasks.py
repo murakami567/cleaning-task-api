@@ -105,9 +105,6 @@ def update_task(
     if assigned_staff_name is not None:
         payload["assigned_staff_name"] = assigned_staff_name
 
-    if checker_id is not None:
-        payload["checker_id"] = checker_id
-
     if checker_name is not None:
         payload["checker_name"] = checker_name
 
