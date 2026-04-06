@@ -735,7 +735,6 @@ def employee_home(staff_id: str):
 
 @router.get("/employee/tasks")
 def employee_tasks(staff_id: str):
-
     res = (
         supabase.table("cleaning_tasks")
         .select("*")
@@ -744,8 +743,53 @@ def employee_tasks(staff_id: str):
         .execute()
     )
 
-    return res.data or []
+    rows = res.data or []
 
+    def calc_towel_count(property_name, next_guest_count, next_stay_nights):
+        if property_name in ["FFFホテル", "やなぎ橋"]:
+            return ""
+
+        guests = int(next_guest_count or 0)
+        nights = int(next_stay_nights or 0)
+
+        if guests <= 0 or nights <= 0:
+            return ""
+
+        if nights >= 8:
+            return guests * 3
+        elif nights >= 3:
+            return guests * 2
+        else:
+            return guests * 1
+
+    tasks = []
+    for row in rows:
+        tasks.append({
+            "id": row.get("id"),
+            "title": "清掃タスク",
+            "propertyName": row.get("property_name") or "",
+            "roomName": row.get("room_name") or "",
+            "dueDate": row.get("task_date") or "",
+            "status": row.get("status") or "pending",
+            "note": row.get("note") or "",
+            "assigneeName": (
+                row.get("assigned_staff_names", [""])[0]
+                if isinstance(row.get("assigned_staff_names"), list) and row.get("assigned_staff_names")
+                else row.get("assigned_staff_name") or ""
+            ),
+            "checkerName": row.get("checker_name") or "",
+            "date": row.get("task_date") or "",
+            "deadline": row.get("next_checkin_date") or "",
+            "rateCi": row.get("early_checkin_fee") or "",
+            "rateCo": row.get("late_checkout_fee") or "",
+            "towelCount": calc_towel_count(
+                row.get("property_name"),
+                row.get("next_guest_count"),
+                row.get("next_stay_nights"),
+            ),
+        })
+
+    return {"tasks": tasks}
 
 @router.get("/employee/schedule")
 def employee_schedule(staff_id: str):
