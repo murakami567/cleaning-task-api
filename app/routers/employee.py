@@ -1,7 +1,8 @@
+from collections import defaultdict
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.db import supabase
 from app.services.auth_service import get_current_user_id
@@ -39,17 +40,18 @@ def get_me(user_id: str = Depends(get_current_user_id)):
 def get_home(user_id: str = Depends(get_current_user_id)):
     today = date.today().isoformat()
 
-    user_res = (
+    staff_res = (
         supabase
-        .table("users")
-        .select("id, assigned_properties")
+        .table("staff_members")
+        .select("id, staff_name")
         .eq("id", user_id)
         .limit(1)
         .execute()
     )
 
-    user_data = user_res.data[0] if user_res.data else {}
-    assigned_properties = user_data.get("assigned_properties", []) or []
+    staff_name = ""
+    if staff_res.data:
+        staff_name = staff_res.data[0].get("staff_name") or ""
 
     today_task_res = (
         supabase
@@ -78,12 +80,22 @@ def get_home(user_id: str = Depends(get_current_user_id)):
         .execute()
     )
 
+    today_check_res = (
+        supabase
+        .table("cleaning_tasks")
+        .select("id")
+        .eq("task_date", today)
+        .eq("checker_name", staff_name)
+        .execute()
+    ) if staff_name else None
+
     return {
         "todayTaskCount": len(today_task_res.data or []),
         "upcomingTaskCount": len(upcoming_task_res.data or []),
         "todayScheduleCount": len(today_schedule_res.data or []),
         "unreadNoticeCount": 0,
-        "assignedProperties": assigned_properties,
+        "todayCheckCount": len((today_check_res.data if today_check_res else []) or []),
+        "assignedProperties": [],
     }
 
 
@@ -111,18 +123,17 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
         .execute()
     )
 
-    check_query = (
-    supabase.table("cleaning_tasks")
-    .select("*")
-    .eq("checker_name", staff_name)
-)
-
     if staff_name:
-        check_query = check_query.or_(f"checker_id.eq.{user_id},checker_name.eq.{staff_name}")
+        check_res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("*")
+            .eq("checker_name", staff_name)
+            .order("task_date")
+            .execute()
+        )
     else:
-        check_query = check_query.eq("checker_id", user_id)
-
-    check_res = check_query.execute()
+        check_res = None
 
     other_res = (
         supabase
@@ -134,7 +145,7 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
     )
 
     cleaning_tasks = [map_cleaning_task(row, "cleaning") for row in (cleaning_res.data or [])]
-    check_tasks = [map_cleaning_task(row, "check") for row in (check_res.data or [])]
+    check_tasks = [map_cleaning_task(row, "check") for row in ((check_res.data if check_res else []) or [])]
     other_tasks = [map_other_task(row) for row in (other_res.data or [])]
 
     return {
@@ -178,6 +189,84 @@ def get_schedule(user_id: str = Depends(get_current_user_id)):
     return {"schedules": schedules}
 
 
+@router.get("/schedule-calendar")
+def get_schedule_calendar(
+    month: str = Query(..., description="YYYY-MM"),
+    user_id: str = Depends(get_current_user_id),
+):
+    from datetime import datetime
+
+    try:
+        target_month = datetime.strptime(month, "%Y-%m")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="month は YYYY-MM 形式で指定してください。")
+
+    month_start = target_month.date().replace(day=1)
+
+    if target_month.month == 12:
+        next_month_start = date(target_month.year + 1, 1, 1)
+    else:
+        next_month_start = date(target_month.year, target_month.month + 1, 1)
+
+    res = (
+        supabase
+        .table("cleaning_tasks")
+        .select("*")
+        .contains("assigned_staff_ids", [user_id])
+        .gte("task_date", month_start.isoformat())
+        .lt("task_date", next_month_start.isoformat())
+        .order("task_date")
+        .execute()
+    )
+
+    rows = res.data or []
+
+    calendar_map = defaultdict(lambda: {
+        "cleaningCount": 0,
+        "inspectionCount": 0,
+        "propertyCounts": defaultdict(int),
+    })
+
+    for row in rows:
+        task_date = row.get("task_date")
+        if not task_date:
+            continue
+
+        property_name = row.get("property_name") or ""
+        note = row.get("note") or ""
+        title = row.get("title") or ""
+
+        text_for_judge = f"{title} {note} {property_name}"
+        is_inspection = (
+            "インスペクション" in text_for_judge
+            or "点検" in text_for_judge
+            or "検品" in text_for_judge
+        )
+
+        if is_inspection:
+            calendar_map[task_date]["inspectionCount"] += 1
+        else:
+            calendar_map[task_date]["cleaningCount"] += 1
+
+        if property_name:
+            calendar_map[task_date]["propertyCounts"][property_name] += 1
+
+    result = []
+    for task_date, value in sorted(calendar_map.items()):
+        result.append({
+            "date": task_date,
+            "cleaningCount": value["cleaningCount"],
+            "inspectionCount": value["inspectionCount"],
+            "propertyCounts": dict(value["propertyCounts"]),
+            "totalCount": value["cleaningCount"] + value["inspectionCount"],
+        })
+
+    return {
+        "month": month,
+        "days": result,
+    }
+
+
 @router.post("/worklogs")
 def create_worklog(
     payload: dict[str, Any] = Body(...),
@@ -216,7 +305,7 @@ def update_password(
 
     user_res = (
         supabase
-        .table("users")
+        .table("staff_members")
         .select("id, password")
         .eq("id", user_id)
         .limit(1)
@@ -233,7 +322,7 @@ def update_password(
 
     update_res = (
         supabase
-        .table("users")
+        .table("staff_members")
         .update({"password": new_password})
         .eq("id", user_id)
         .execute()
