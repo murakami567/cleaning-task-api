@@ -131,6 +131,16 @@ def calc_gap_nights(checkout_date: str | None, next_checkin_date: str | None):
     except Exception:
         return 0
 
+def calc_stay_nights(checkin_date: str | None, checkout_date: str | None):
+    if not checkin_date or not checkout_date:
+        return 0
+    try:
+        d1 = datetime.fromisoformat(checkin_date).date()
+        d2 = datetime.fromisoformat(checkout_date).date()
+        return max((d2 - d1).days, 0)
+    except Exception:
+        return 0
+
 
 def calc_load_score(guest_count: int, gap_nights: int) -> int:
     score = guest_count or 0
@@ -266,7 +276,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
     for rec in records:
         grouped[rec["room_key"]].append(rec)
 
-    # 3. 各部屋で「次の予約の checkin_date」を next_checkin_date として決定
+        # 3. 各部屋で「次の予約」を参照して cleaning_tasks 用の値を作成
     final_records = []
 
     for room_key, room_records in grouped.items():
@@ -274,8 +284,17 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
 
         for idx, rec in enumerate(room_records):
             next_checkin_date = None
+            next_guest_count = 0
+            next_stay_nights = 0
+
             if idx + 1 < len(room_records):
-                next_checkin_date = room_records[idx + 1]["checkin_date"]
+                next_rec = room_records[idx + 1]
+                next_checkin_date = next_rec["checkin_date"]
+                next_guest_count = next_rec["guest_count"] or 0
+                next_stay_nights = calc_stay_nights(
+                    next_rec["checkin_date"],
+                    next_rec["checkout_date"],
+                )
 
             gap_nights = calc_gap_nights(rec["checkout_date"], next_checkin_date)
             load_score = calc_load_score(rec["guest_count"], gap_nights)
@@ -290,6 +309,8 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 "next_checkin_date": next_checkin_date,
                 "gap_nights": gap_nights,
                 "guest_count": rec["guest_count"],
+                "next_guest_count": next_guest_count,
+                "next_stay_nights": next_stay_nights,
                 "load_score": load_score,
                 "status": "未着手",
                 "note": "",
