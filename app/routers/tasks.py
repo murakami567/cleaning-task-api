@@ -82,6 +82,8 @@ def update_task(
     assigned_staff_names: list[str] | None = Body(None),
     assigned_staff_id: str | None = Body(None),
     assigned_staff_name: str | None = Body(None),
+    checker_id: str | None = Body(None),
+    checker_name: str | None = Body(None),
 ):
     payload = {}
 
@@ -97,12 +99,17 @@ def update_task(
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
 
-    # 外部キー問題があるなら単数列は無理に触らない
     if assigned_staff_id is not None:
         payload["assigned_staff_id"] = assigned_staff_id
 
     if assigned_staff_name is not None:
         payload["assigned_staff_name"] = assigned_staff_name
+
+    if checker_id is not None:
+        payload["checker_id"] = checker_id
+
+    if checker_name is not None:
+        payload["checker_name"] = checker_name
 
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
