@@ -100,14 +100,25 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
     tasks = []
     for row in res.data or []:
         tasks.append({
-            "id": row.get("id"),
-            "title": f"清掃タスク {row.get('property_name', '')}",
-            "propertyName": row.get("property_name", ""),
-            "roomName": row.get("room_name", ""),
-            "dueDate": row.get("task_date", ""),
-            "status": normalize_task_status(row.get("status")),
-            "note": row.get("note", ""),
-        })
+    "id": row.get("id"),
+    "title": f"清掃タスク {row.get('property_name', '')}",
+    "propertyName": row.get("property_name", ""),
+    "roomName": row.get("room_name", ""),
+    "dueDate": row.get("task_date", ""),
+    "status": normalize_task_status(row.get("status")),
+    "note": row.get("note", ""),
+
+    "assigneeName": row.get("assigned_staff_name", ""),
+    "checkerName": row.get("checker_name", ""),
+    "date": row.get("task_date", ""),
+    "deadline": row.get("next_checkin_date", ""),
+    "rateCi": row.get("early_checkin_fee"),
+    "rateCo": row.get("late_checkout_fee"),
+
+    # ★タオル計算用
+    "next_guest_count": row.get("next_guest_count", 0),
+    "next_stay_nights": row.get("next_stay_nights", 0),
+})
 
     return {"tasks": tasks}
 
