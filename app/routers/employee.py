@@ -135,14 +135,17 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
     else:
         check_res = None
 
-    other_res = (
-        supabase
-        .table("non_cleaning_tasks")
-        .select("*")
-        .contains("assignee_ids", [user_id])
-        .order("task_date")
-        .execute()
-    )
+    today = date.today().isoformat()
+
+other_res = (
+    supabase
+    .table("non_cleaning_tasks")
+    .select("*")
+    .contains("assignee_ids", [user_id])
+    .eq("task_date", today)
+    .order("task_date")
+    .execute()
+)
 
     cleaning_tasks = [map_cleaning_task(row, "cleaning") for row in (cleaning_res.data or [])]
     check_tasks = [map_cleaning_task(row, "check") for row in ((check_res.data if check_res else []) or [])]
