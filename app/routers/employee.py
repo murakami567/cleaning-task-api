@@ -112,11 +112,10 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
     )
 
     check_query = (
-        supabase
-        .table("cleaning_tasks")
-        .select("*")
-        .order("task_date")
-    )
+    supabase.table("cleaning_tasks")
+    .select("*")
+    .eq("checker_name", staff_name)
+)
 
     if staff_name:
         check_query = check_query.or_(f"checker_id.eq.{user_id},checker_name.eq.{staff_name}")
