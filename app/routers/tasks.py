@@ -751,12 +751,12 @@ def employee_tasks(staff_id: str):
     # チェックタスク
     # ===============================
     check_res = (
-        supabase.table("cleaning_tasks")
-        .select("*")
-        .eq("checker_id", staff_id)
-        .order("task_date")
-        .execute()
-    )
+    supabase.table("cleaning_tasks")
+    .select("*")
+    .eq("checker_name", staff_name)
+    .order("task_date")
+    .execute()
+)
 
     # ===============================
     # その他タスク
