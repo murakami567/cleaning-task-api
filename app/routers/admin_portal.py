@@ -81,7 +81,11 @@ def save_today_message(
 
 
 @router.get("/calendar")
-def get_admin_calendar(year: int, month: int, current_user: dict = Depends(require_admin_or_leader)):
+def get_admin_calendar(
+    year: int,
+    month: int,
+    current_user: dict = Depends(require_admin_or_leader),
+):
     from datetime import date
 
     start_date = date(year, month, 1).isoformat()
