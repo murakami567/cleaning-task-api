@@ -90,25 +90,25 @@ def get_home(user_id: str = Depends(get_current_user_id)):
     ) if staff_name else None
 
     message_res = (
-    supabase
-    .table("portal_messages")
-    .select("id, message, target_date, updated_at")
-    .eq("target_date", today)
-    .order("updated_at", desc=True)
-    .execute()
-)
+        supabase
+        .table("portal_messages")
+        .select("id, message, target_date, updated_at")
+        .eq("target_date", today)
+        .order("updated_at", desc=True)
+        .execute()
+    )
 
-today_messages = message_res.data or []
+    today_messages = message_res.data or []
+
     return {
-    "todayTaskCount": len(today_task_res.data or []),
-    "upcomingTaskCount": len(upcoming_task_res.data or []),
-    "todayScheduleCount": len(today_schedule_res.data or []),
-    "unreadNoticeCount": 0,
-    "todayCheckCount": len((today_check_res.data if today_check_res else []) or []),
-    "assignedProperties": [],
-    "todayMessages": today_messages,
-}
-
+        "todayTaskCount": len(today_task_res.data or []),
+        "upcomingTaskCount": len(upcoming_task_res.data or []),
+        "todayScheduleCount": len(today_schedule_res.data or []),
+        "unreadNoticeCount": 0,
+        "todayCheckCount": len((today_check_res.data if today_check_res else []) or []),
+        "assignedProperties": [],
+        "todayMessages": today_messages,
+    }
 
 @router.get("/tasks")
 def get_tasks(user_id: str = Depends(get_current_user_id)):
