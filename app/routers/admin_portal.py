@@ -13,6 +13,15 @@ class TodayMessageBody(BaseModel):
     message: str
 
 
+class PortalScheduleBody(BaseModel):
+    start_date: str
+    end_date: str
+    assignee_ids: list[str] = []
+    assignee_names: list[str] = []
+    title: str
+    description: str = ""
+
+
 @router.get("/home")
 def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
     today = date.today().isoformat()
@@ -93,3 +102,112 @@ def get_admin_calendar(
     )
 
     return {"days": res.data or []}
+
+
+@router.get("/calendar-schedules")
+def get_calendar_schedules(
+    year: int,
+    month: int,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    month_start = date(year, month, 1)
+    if month == 12:
+        month_end = date(year + 1, 1, 1)
+    else:
+        month_end = date(year, month + 1, 1)
+
+    res = (
+        supabase
+        .table("portal_schedules")
+        .select("*")
+        .lte("start_date", month_end.isoformat())
+        .gte("end_date", month_start.isoformat())
+        .order("start_date")
+        .execute()
+    )
+
+    return {"schedules": res.data or []}
+
+
+@router.post("/calendar-schedules")
+def create_calendar_schedule(
+    payload: PortalScheduleBody,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    user_id = current_user["user_id"]
+
+    if not payload.start_date:
+        raise HTTPException(status_code=400, detail="start_date は必須です。")
+    if not payload.end_date:
+        raise HTTPException(status_code=400, detail="end_date は必須です。")
+    if payload.end_date < payload.start_date:
+        raise HTTPException(status_code=400, detail="end_date は start_date 以降にしてください。")
+    if not payload.title.strip():
+        raise HTTPException(status_code=400, detail="title は必須です。")
+
+    res = (
+        supabase
+        .table("portal_schedules")
+        .insert({
+            "start_date": payload.start_date,
+            "end_date": payload.end_date,
+            "assignee_ids": payload.assignee_ids or [],
+            "assignee_names": payload.assignee_names or [],
+            "title": payload.title.strip(),
+            "description": payload.description.strip(),
+            "created_by": user_id,
+        })
+        .execute()
+    )
+
+    return {"ok": True, "data": res.data}
+
+
+@router.put("/calendar-schedules/{schedule_id}")
+def update_calendar_schedule(
+    schedule_id: str,
+    payload: PortalScheduleBody,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    if not payload.start_date:
+        raise HTTPException(status_code=400, detail="start_date は必須です。")
+    if not payload.end_date:
+        raise HTTPException(status_code=400, detail="end_date は必須です。")
+    if payload.end_date < payload.start_date:
+        raise HTTPException(status_code=400, detail="end_date は start_date 以降にしてください。")
+    if not payload.title.strip():
+        raise HTTPException(status_code=400, detail="title は必須です。")
+
+    res = (
+        supabase
+        .table("portal_schedules")
+        .update({
+            "start_date": payload.start_date,
+            "end_date": payload.end_date,
+            "assignee_ids": payload.assignee_ids or [],
+            "assignee_names": payload.assignee_names or [],
+            "title": payload.title.strip(),
+            "description": payload.description.strip(),
+            "updated_at": "now()",
+        })
+        .eq("id", schedule_id)
+        .execute()
+    )
+
+    return {"ok": True, "data": res.data}
+
+
+@router.delete("/calendar-schedules/{schedule_id}")
+def delete_calendar_schedule(
+    schedule_id: str,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    res = (
+        supabase
+        .table("portal_schedules")
+        .delete()
+        .eq("id", schedule_id)
+        .execute()
+    )
+
+    return {"ok": True, "data": res.data}
