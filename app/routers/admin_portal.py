@@ -22,7 +22,7 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
         .table("portal_messages")
         .select("*")
         .eq("target_date", today)
-        .limit(1)
+        .order("updated_at", desc=True)
         .execute()
     )
 
@@ -34,13 +34,9 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
         .execute()
     )
 
-    today_message = ""
-    if message_res.data:
-        today_message = message_res.data[0].get("message") or ""
-
     return {
         "todayDate": today,
-        "todayMessage": today_message,
+        "todayMessages": message_res.data or [],
         "todayShift": shift_res.data[0] if shift_res.data else None,
     }
 
@@ -57,37 +53,19 @@ def save_today_message(
     if not target_date:
         raise HTTPException(status_code=400, detail="target_date は必須です。")
 
-    existing = (
+    if not message:
+        raise HTTPException(status_code=400, detail="message は必須です。")
+
+    res = (
         supabase
         .table("portal_messages")
-        .select("id")
-        .eq("target_date", target_date)
-        .limit(1)
+        .insert({
+            "target_date": target_date,
+            "message": message,
+            "updated_by": user_id,
+        })
         .execute()
     )
-
-    if existing.data:
-        res = (
-            supabase
-            .table("portal_messages")
-            .update({
-                "message": message,
-                "updated_by": user_id,
-            })
-            .eq("target_date", target_date)
-            .execute()
-        )
-    else:
-        res = (
-            supabase
-            .table("portal_messages")
-            .insert({
-                "target_date": target_date,
-                "message": message,
-                "updated_by": user_id,
-            })
-            .execute()
-        )
 
     return {"ok": True, "data": res.data}
 
