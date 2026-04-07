@@ -1,5 +1,5 @@
 from datetime import date
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import supabase
@@ -9,6 +9,7 @@ router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal"])
 
 
 class TodayMessageBody(BaseModel):
+    target_date: str
     message: str
 
 
@@ -38,6 +39,7 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
         today_message = message_res.data[0].get("message") or ""
 
     return {
+        "todayDate": today,
         "todayMessage": today_message,
         "todayShift": shift_res.data[0] if shift_res.data else None,
     }
@@ -48,15 +50,18 @@ def save_today_message(
     payload: TodayMessageBody,
     current_user: dict = Depends(require_admin_or_leader),
 ):
-    today = date.today().isoformat()
     user_id = current_user["user_id"]
-    message = payload.message
+    target_date = payload.target_date
+    message = payload.message.strip()
+
+    if not target_date:
+        raise HTTPException(status_code=400, detail="target_date は必須です。")
 
     existing = (
         supabase
         .table("portal_messages")
         .select("id")
-        .eq("target_date", today)
+        .eq("target_date", target_date)
         .limit(1)
         .execute()
     )
@@ -69,7 +74,7 @@ def save_today_message(
                 "message": message,
                 "updated_by": user_id,
             })
-            .eq("target_date", today)
+            .eq("target_date", target_date)
             .execute()
         )
     else:
@@ -77,7 +82,7 @@ def save_today_message(
             supabase
             .table("portal_messages")
             .insert({
-                "target_date": today,
+                "target_date": target_date,
                 "message": message,
                 "updated_by": user_id,
             })
