@@ -114,26 +114,30 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
     if staff_res.data:
         staff_name = staff_res.data[0].get("staff_name") or ""
 
-    cleaning_res = (
+    today = date.today().isoformat()
+
+cleaning_res = (
+    supabase
+    .table("cleaning_tasks")
+    .select("*")
+    .contains("assigned_staff_ids", [user_id])
+    .eq("task_date", today)
+    .order("task_date")
+    .execute()
+)
+
+if staff_name:
+    check_res = (
         supabase
         .table("cleaning_tasks")
         .select("*")
-        .contains("assigned_staff_ids", [user_id])
+        .eq("checker_name", staff_name)
+        .eq("task_date", today)
         .order("task_date")
         .execute()
     )
-
-    if staff_name:
-        check_res = (
-            supabase
-            .table("cleaning_tasks")
-            .select("*")
-            .eq("checker_name", staff_name)
-            .order("task_date")
-            .execute()
-        )
-    else:
-        check_res = None
+else:
+    check_res = None
 
     today = date.today().isoformat()
 
