@@ -101,6 +101,8 @@ def get_home(user_id: str = Depends(get_current_user_id)):
 
 @router.get("/tasks")
 def get_tasks(user_id: str = Depends(get_current_user_id)):
+    today = date.today().isoformat()
+
     staff_res = (
         supabase
         .table("staff_members")
@@ -114,32 +116,28 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
     if staff_res.data:
         staff_name = staff_res.data[0].get("staff_name") or ""
 
-    today = date.today().isoformat()
-
-cleaning_res = (
-    supabase
-    .table("cleaning_tasks")
-    .select("*")
-    .contains("assigned_staff_ids", [user_id])
-    .eq("task_date", today)
-    .order("task_date")
-    .execute()
-)
-
-if staff_name:
-    check_res = (
+    cleaning_res = (
         supabase
         .table("cleaning_tasks")
         .select("*")
-        .eq("checker_name", staff_name)
+        .contains("assigned_staff_ids", [user_id])
         .eq("task_date", today)
         .order("task_date")
         .execute()
     )
-else:
-    check_res = None
 
-    today = date.today().isoformat()
+    if staff_name:
+        check_res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("*")
+            .eq("checker_name", staff_name)
+            .eq("task_date", today)
+            .order("task_date")
+            .execute()
+        )
+    else:
+        check_res = None
 
     other_res = (
         supabase
