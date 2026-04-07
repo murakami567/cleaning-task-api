@@ -28,14 +28,27 @@ def login(payload: LoginRequest):
         raise HTTPException(status_code=401, detail="ユーザーが存在しません。")
 
     user = res.data[0]
+    user_role = user.get("role")
 
     if user.get("password") != payload.password:
         raise HTTPException(status_code=401, detail="パスワードが違います。")
 
-    if payload.role and user.get("role") != payload.role:
-        raise HTTPException(status_code=403, detail="この画面にログインできません。")
+    # 管理画面ログイン
+    if payload.role == "admin_portal":
+        if user_role not in ["admin", "leader"]:
+            raise HTTPException(status_code=403, detail="管理画面にログインできません。")
 
-    access_token = create_access_token(str(user["id"]))
+    # 一般画面ログイン
+    elif payload.role == "employee_portal":
+        if user_role != "staff":
+            raise HTTPException(status_code=403, detail="一般画面にログインできません。")
+
+    # 個別ロール指定が来た場合
+    elif payload.role:
+        if user_role != payload.role:
+            raise HTTPException(status_code=403, detail="この画面にログインできません。")
+
+    access_token = create_access_token(str(user["id"]), user_role or "")
 
     return {
         "access_token": access_token,
@@ -43,6 +56,6 @@ def login(payload: LoginRequest):
             "id": user.get("id"),
             "name": user.get("staff_name"),
             "login_id": user.get("staff_code"),
-            "role": user.get("role"),
+            "role": user_role,
         },
     }
