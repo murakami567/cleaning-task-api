@@ -99,9 +99,6 @@ def get_home(user_id: str = Depends(get_current_user_id)):
 )
 
 today_messages = message_res.data or []
-    if message_res.data:
-        today_message = message_res.data[0].get("message") or ""
-
     return {
     "todayTaskCount": len(today_task_res.data or []),
     "upcomingTaskCount": len(upcoming_task_res.data or []),
