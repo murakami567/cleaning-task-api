@@ -7,6 +7,7 @@ from app.routers.beds24 import router as beds24_router
 from app.routers.auth import router as auth_router
 from app.routers.employee import router as employee_router
 
+from app.routers.admin_portal import router as admin_portal_router
 
 app = FastAPI()
 
@@ -32,3 +33,4 @@ app.include_router(tasks_router)
 app.include_router(beds24_router)
 app.include_router(auth_router)
 app.include_router(employee_router)
+app.include_router(admin_portal_router)
