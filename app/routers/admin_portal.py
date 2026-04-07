@@ -1,9 +1,15 @@
 from datetime import date
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
 from app.db import supabase
 from app.services.auth_service import require_admin_or_leader
 
 router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal"])
+
+
+class TodayMessageBody(BaseModel):
+    message: str
 
 
 @router.get("/home")
@@ -39,11 +45,12 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
 
 @router.post("/today-message")
 def save_today_message(
-    message: str = Body(...),
+    payload: TodayMessageBody,
     current_user: dict = Depends(require_admin_or_leader),
 ):
     today = date.today().isoformat()
     user_id = current_user["user_id"]
+    message = payload.message
 
     existing = (
         supabase
@@ -86,8 +93,6 @@ def get_admin_calendar(
     month: int,
     current_user: dict = Depends(require_admin_or_leader),
 ):
-    from datetime import date
-
     start_date = date(year, month, 1).isoformat()
     if month == 12:
         end_date = date(year + 1, 1, 1).isoformat()
