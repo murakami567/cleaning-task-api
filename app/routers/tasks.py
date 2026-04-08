@@ -359,7 +359,9 @@ def upsert_staff(
 
 @router.get("/shift-board")
 def get_shift_board(year: int, month: int):
+
     from datetime import date
+    from collections import defaultdict
 
     start_date = date(year, month, 1).isoformat()
 
@@ -368,6 +370,9 @@ def get_shift_board(year: int, month: int):
     else:
         end_date = date(year, month + 1, 1).isoformat()
 
+    # =========================
+    # スタッフ
+    # =========================
     staff_res = (
         supabase.table("staff_members")
         .select("*")
@@ -376,6 +381,9 @@ def get_shift_board(year: int, month: int):
         .execute()
     )
 
+    # =========================
+    # シフト
+    # =========================
     day_res = (
         supabase.table("shift_days")
         .select("*, shift_entries(*, staff_members(*))")
@@ -385,9 +393,26 @@ def get_shift_board(year: int, month: int):
         .execute()
     )
 
+    # =========================
+    # 清掃タスク数
+    # =========================
+    task_res = (
+        supabase.table("cleaning_tasks")
+        .select("task_date")
+        .gte("task_date", start_date)
+        .lt("task_date", end_date)
+        .execute()
+    )
+
+    cleaning_counts = defaultdict(int)
+
+    for row in task_res.data or []:
+        cleaning_counts[row["task_date"]] += 1
+
     return {
         "staffs": staff_res.data or [],
         "days": day_res.data or [],
+        "cleaning_counts": cleaning_counts
     }
 
 
