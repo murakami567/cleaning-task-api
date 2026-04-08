@@ -248,7 +248,7 @@ def delete_non_cleaning_task(task_id: str = Body(...)):
 
 
 # =========================================================
-# 物件 / 部屋 / シフト
+# 物件 / 部屋
 # =========================================================
 @router.get("/properties")
 def get_properties():
@@ -259,47 +259,74 @@ def get_properties():
         .order("property_name")
         .execute()
     )
-    return res.data
+    return res.data or []
 
-# =========================================================
-# 物件保存
-# =========================================================
 
-@router.post("/properties/upsert")
-def upsert_property(
-    property_id: str | None = Body(None),
+@router.post("/properties/create")
+def create_property(
+    property_code: str = Body(...),
     property_name: str = Body(...),
+    normalized_name: str | None = Body(None),
     sort_order: int = Body(999),
     is_active: bool = Body(True),
 ):
-
     payload = {
-        "property_name": property_name,
+        "property_code": property_code.strip(),
+        "property_name": property_name.strip(),
+        "normalized_name": (normalized_name or property_name).strip(),
         "sort_order": sort_order,
-        "is_active": is_active
+        "is_active": is_active,
     }
 
-    # 更新
-    if property_id:
-        res = (
-            supabase.table("properties")
-            .update(payload)
-            .eq("id", property_id)
-            .execute()
-        )
-
-    # 新規
-    else:
-        res = (
-            supabase.table("properties")
-            .insert(payload)
-            .execute()
-        )
+    res = (
+        supabase.table("properties")
+        .insert(payload)
+        .execute()
+    )
 
     if not res.data:
-        raise HTTPException(status_code=500, detail="property save failed")
+        raise HTTPException(status_code=500, detail="property create failed")
 
     return res.data[0]
+
+
+@router.post("/properties/update")
+def update_property(
+    property_id: str = Body(...),
+    property_code: str | None = Body(None),
+    property_name: str | None = Body(None),
+    normalized_name: str | None = Body(None),
+    sort_order: int | None = Body(None),
+    is_active: bool | None = Body(None),
+):
+    payload = {}
+
+    if property_code is not None:
+        payload["property_code"] = property_code.strip()
+    if property_name is not None:
+        payload["property_name"] = property_name.strip()
+    if normalized_name is not None:
+        payload["normalized_name"] = normalized_name.strip()
+    if sort_order is not None:
+        payload["sort_order"] = sort_order
+    if is_active is not None:
+        payload["is_active"] = is_active
+
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    res = (
+        supabase.table("properties")
+        .update(payload)
+        .eq("id", property_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="property update failed")
+
+    return res.data[0]
+
 
 @router.get("/rooms")
 def get_rooms(property_id: str | None = None):
@@ -314,7 +341,89 @@ def get_rooms(property_id: str | None = None):
         query = query.eq("property_id", property_id)
 
     res = query.execute()
-    return res.data
+    return res.data or []
+
+
+@router.post("/rooms/create")
+def create_room(
+    property_id: str = Body(...),
+    room_name: str = Body(...),
+    room_code: str | None = Body(None),
+    room_key: str = Body(...),
+    normalized_room_key: str | None = Body(None),
+    capacity: int = Body(1),
+    room_sort_order: int = Body(999),
+    is_active: bool = Body(True),
+):
+    payload = {
+        "property_id": property_id,
+        "room_name": room_name.strip(),
+        "room_code": (room_code or room_name).strip(),
+        "room_key": room_key.strip(),
+        "normalized_room_key": (normalized_room_key or room_key).strip(),
+        "capacity": capacity,
+        "room_sort_order": room_sort_order,
+        "is_active": is_active,
+    }
+
+    res = (
+        supabase.table("rooms")
+        .insert(payload)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="room create failed")
+
+    return res.data[0]
+
+
+@router.post("/rooms/update")
+def update_room(
+    room_id: str = Body(...),
+    property_id: str | None = Body(None),
+    room_name: str | None = Body(None),
+    room_code: str | None = Body(None),
+    room_key: str | None = Body(None),
+    normalized_room_key: str | None = Body(None),
+    capacity: int | None = Body(None),
+    room_sort_order: int | None = Body(None),
+    is_active: bool | None = Body(None),
+):
+    payload = {}
+
+    if property_id is not None:
+        payload["property_id"] = property_id
+    if room_name is not None:
+        payload["room_name"] = room_name.strip()
+    if room_code is not None:
+        payload["room_code"] = room_code.strip()
+    if room_key is not None:
+        payload["room_key"] = room_key.strip()
+    if normalized_room_key is not None:
+        payload["normalized_room_key"] = normalized_room_key.strip()
+    if capacity is not None:
+        payload["capacity"] = capacity
+    if room_sort_order is not None:
+        payload["room_sort_order"] = room_sort_order
+    if is_active is not None:
+        payload["is_active"] = is_active
+
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    res = (
+        supabase.table("rooms")
+        .update(payload)
+        .eq("id", room_id)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="room update failed")
+
+    return res.data[0]
+
 
 @router.post("/rooms/bulk-create")
 def bulk_create_rooms(
@@ -323,7 +432,6 @@ def bulk_create_rooms(
     default_capacity: int = Body(1),
     start_sort_order: int = Body(1),
 ):
-    # 物件取得
     prop_res = (
         supabase.table("properties")
         .select("*")
@@ -382,52 +490,8 @@ def bulk_create_rooms(
     }
 
 
-
-# =========================================================
-# 部屋保存
-# =========================================================
-
-@router.post("/rooms/upsert")
-def upsert_room(
-    room_id: str | None = Body(None),
-    property_id: str = Body(...),
-    room_name: str = Body(...),
-    room_sort_order: int = Body(999),
-    is_active: bool = Body(True),
-):
-
-    payload = {
-        "property_id": property_id,
-        "room_name": room_name,
-        "room_sort_order": room_sort_order,
-        "is_active": is_active
-    }
-
-    # 更新
-    if room_id:
-        res = (
-            supabase.table("rooms")
-            .update(payload)
-            .eq("id", room_id)
-            .execute()
-        )
-
-    # 新規
-    else:
-        res = (
-            supabase.table("rooms")
-            .insert(payload)
-            .execute()
-        )
-
-    if not res.data:
-        raise HTTPException(status_code=500, detail="room save failed")
-
-    return res.data[0]
-
 @router.post("/rooms/delete")
 def delete_room(room_id: str = Body(...)):
-
     res = (
         supabase.table("rooms")
         .delete()
