@@ -261,6 +261,45 @@ def get_properties():
     )
     return res.data
 
+# =========================================================
+# 物件保存
+# =========================================================
+
+@router.post("/properties/upsert")
+def upsert_property(
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    sort_order: int = Body(999),
+    is_active: bool = Body(True),
+):
+
+    payload = {
+        "property_name": property_name,
+        "sort_order": sort_order,
+        "is_active": is_active
+    }
+
+    # 更新
+    if property_id:
+        res = (
+            supabase.table("properties")
+            .update(payload)
+            .eq("id", property_id)
+            .execute()
+        )
+
+    # 新規
+    else:
+        res = (
+            supabase.table("properties")
+            .insert(payload)
+            .execute()
+        )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="property save failed")
+
+    return res.data[0]
 
 @router.get("/rooms")
 def get_rooms(property_id: str | None = None):
@@ -277,6 +316,60 @@ def get_rooms(property_id: str | None = None):
     res = query.execute()
     return res.data
 
+
+# =========================================================
+# 部屋保存
+# =========================================================
+
+@router.post("/rooms/upsert")
+def upsert_room(
+    room_id: str | None = Body(None),
+    property_id: str = Body(...),
+    room_name: str = Body(...),
+    room_sort_order: int = Body(999),
+    is_active: bool = Body(True),
+):
+
+    payload = {
+        "property_id": property_id,
+        "room_name": room_name,
+        "room_sort_order": room_sort_order,
+        "is_active": is_active
+    }
+
+    # 更新
+    if room_id:
+        res = (
+            supabase.table("rooms")
+            .update(payload)
+            .eq("id", room_id)
+            .execute()
+        )
+
+    # 新規
+    else:
+        res = (
+            supabase.table("rooms")
+            .insert(payload)
+            .execute()
+        )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="room save failed")
+
+    return res.data[0]
+
+@router.post("/rooms/delete")
+def delete_room(room_id: str = Body(...)):
+
+    res = (
+        supabase.table("rooms")
+        .delete()
+        .eq("id", room_id)
+        .execute()
+    )
+
+    return {"ok": True, "data": res.data}
 
 # =========================================================
 # シフト管理
