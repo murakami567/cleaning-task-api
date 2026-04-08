@@ -491,7 +491,12 @@ def bulk_create_rooms(
 
 
 @router.post("/rooms/delete")
-def delete_room(room_id: str = Body(...)):
+def delete_room(payload: dict = Body(...)):
+    room_id = payload.get("room_id")
+
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
     res = (
         supabase.table("rooms")
         .delete()
