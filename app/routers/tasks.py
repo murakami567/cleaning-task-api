@@ -359,20 +359,20 @@ def upsert_staff(
 
 @router.get("/shift-board")
 def get_shift_board(year: int, month: int):
-
-    from datetime import date
+    from datetime import date, timedelta
     from collections import defaultdict
 
-    start_date = date(year, month, 1).isoformat()
+    month_start = date(year, month, 1)
 
     if month == 12:
-        end_date = date(year + 1, 1, 1).isoformat()
+        month_end = date(year + 1, 1, 1)
     else:
-        end_date = date(year, month + 1, 1).isoformat()
+        month_end = date(year, month + 1, 1)
 
-    # =========================
-    # スタッフ
-    # =========================
+    # 週表示で月跨ぎしても件数が欠けないように前後7日分広げる
+    range_start = month_start - timedelta(days=7)
+    range_end = month_end + timedelta(days=7)
+
     staff_res = (
         supabase.table("staff_members")
         .select("*")
@@ -381,38 +381,57 @@ def get_shift_board(year: int, month: int):
         .execute()
     )
 
-    # =========================
-    # シフト
-    # =========================
     day_res = (
         supabase.table("shift_days")
         .select("*, shift_entries(*, staff_members(*))")
-        .gte("shift_date", start_date)
-        .lt("shift_date", end_date)
+        .gte("shift_date", range_start.isoformat())
+        .lt("shift_date", range_end.isoformat())
         .order("shift_date")
         .execute()
     )
 
-    # =========================
-    # 清掃タスク数
-    # =========================
     task_res = (
         supabase.table("cleaning_tasks")
         .select("task_date")
-        .gte("task_date", start_date)
-        .lt("task_date", end_date)
+        .gte("task_date", range_start.isoformat())
+        .lt("task_date", range_end.isoformat())
         .execute()
     )
 
     cleaning_counts = defaultdict(int)
-
     for row in task_res.data or []:
-        cleaning_counts[row["task_date"]] += 1
+        task_date = row.get("task_date")
+        if task_date:
+            cleaning_counts[task_date] += 1
+
+    attendance_counts = defaultdict(int)
+    for day in day_res.data or []:
+        shift_date = day.get("shift_date")
+        entries = day.get("shift_entries") or []
+        count = 0
+
+        for entry in entries:
+            status = entry.get("status")
+            if status in ["出勤", "遅刻"]:
+                count += 1
+
+        if shift_date:
+            attendance_counts[shift_date] = count
+
+    workload = {}
+    all_dates = set(cleaning_counts.keys()) | set(attendance_counts.keys())
+
+    for d in all_dates:
+        clean = cleaning_counts.get(d, 0)
+        attendance = attendance_counts.get(d, 0)
+        workload[d] = round(clean / attendance, 1) if attendance > 0 else 0
 
     return {
         "staffs": staff_res.data or [],
         "days": day_res.data or [],
-        "cleaning_counts": cleaning_counts
+        "cleaning_counts": dict(cleaning_counts),
+        "attendance_counts": dict(attendance_counts),
+        "workload": workload,
     }
 
 
