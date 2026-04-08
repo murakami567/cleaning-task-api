@@ -316,6 +316,72 @@ def get_rooms(property_id: str | None = None):
     res = query.execute()
     return res.data
 
+@router.post("/rooms/bulk-create")
+def bulk_create_rooms(
+    property_id: str = Body(...),
+    room_names: list[str] = Body(...),
+    default_capacity: int = Body(1),
+    start_sort_order: int = Body(1),
+):
+    # 物件取得
+    prop_res = (
+        supabase.table("properties")
+        .select("*")
+        .eq("id", property_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not prop_res.data:
+        raise HTTPException(status_code=404, detail="property not found")
+
+    property_row = prop_res.data[0]
+    property_name = property_row.get("property_name") or ""
+
+    cleaned_names = []
+    for name in room_names:
+        n = (name or "").strip()
+        if n:
+            cleaned_names.append(n)
+
+    if not cleaned_names:
+        raise HTTPException(status_code=400, detail="room_names is empty")
+
+    payloads = []
+    current_sort = start_sort_order
+
+    for room_name in cleaned_names:
+        room_code = room_name
+        room_key = f"{property_name}{room_name}"
+
+        payloads.append({
+            "property_id": property_id,
+            "room_name": room_name,
+            "room_code": room_code,
+            "room_key": room_key,
+            "normalized_room_key": room_key,
+            "capacity": default_capacity,
+            "room_sort_order": current_sort,
+            "is_active": True,
+        })
+        current_sort += 1
+
+    res = (
+        supabase.table("rooms")
+        .insert(payloads)
+        .execute()
+    )
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="bulk room create failed")
+
+    return {
+        "ok": True,
+        "count": len(res.data),
+        "data": res.data,
+    }
+
+
 
 # =========================================================
 # 部屋保存
