@@ -229,29 +229,6 @@ def get_today_worklogs(current_user: dict = Depends(require_admin_or_leader)):
 
     worklogs = worklog_res.data or []
 
-    user_ids = list({
-        row.get("user_id")
-        for row in worklogs
-        if row.get("user_id")
-    })
-
-    staff_map = {}
-
-    if user_ids:
-        staff_res = (
-            supabase
-            .table("staff_members")
-            .select("id, staff_name, staff_code")
-            .in_("id", user_ids)
-            .execute()
-        )
-
-        for row in staff_res.data or []:
-            staff_map[row.get("id")] = {
-                "staff_name": row.get("staff_name") or "",
-                "staff_code": row.get("staff_code") or "",
-            }
-
     def calc_work_minutes(start_time: str | None, end_time: str | None, break_minutes: int | None):
         if not start_time or not end_time:
             return 0
@@ -268,13 +245,11 @@ def get_today_worklogs(current_user: dict = Depends(require_admin_or_leader)):
     result = []
 
     for row in worklogs:
-        staff_info = staff_map.get(row.get("user_id"), {})
-
         result.append({
             "id": row.get("id"),
             "user_id": row.get("user_id"),
-            "staff_name": staff_info.get("staff_name", ""),
-            "staff_code": staff_info.get("staff_code", ""),
+            "staff_name": row.get("user_id") or "",
+            "staff_code": "",
             "work_date": row.get("work_date") or "",
             "property_name": row.get("property_name") or "",
             "room_name": row.get("room_name") or "",
