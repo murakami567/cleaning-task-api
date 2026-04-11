@@ -302,6 +302,7 @@ def create_worklog(
         "work_date": payload.get("work_date"),
         "property_name": payload.get("property_name"),
         "room_name": payload.get("room_name"),
+        "work_start_time": payload.get("work_start_time"),
         "start_time": payload.get("start_time"),
         "end_time": payload.get("end_time"),
         "break_minutes": payload.get("break_minutes", 0),
