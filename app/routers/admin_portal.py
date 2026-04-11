@@ -252,18 +252,18 @@ def get_today_worklogs(current_user: dict = Depends(require_admin_or_leader)):
                 "staff_code": row.get("staff_code") or "",
             }
 
-    def calc_work_minutes(start_time: str | None, end_time: str | None, break_minutes: int | None):
-        if not start_time or not end_time:
-            return 0
+    def calc_work_minutes(work_start_time: str | None, end_time: str | None, break_minutes: int | None):
+    if not work_start_time or not end_time:
+        return 0
 
-        try:
-            start_dt = datetime.strptime(start_time, "%H:%M")
-            end_dt = datetime.strptime(end_time, "%H:%M")
-            minutes = int((end_dt - start_dt).total_seconds() / 60)
-            minutes -= int(break_minutes or 0)
-            return max(minutes, 0)
-        except Exception:
-            return 0
+    try:
+        start_dt = datetime.strptime(work_start_time, "%H:%M")
+        end_dt = datetime.strptime(end_time, "%H:%M")
+        minutes = int((end_dt - start_dt).total_seconds() / 60)
+        minutes -= int(break_minutes or 0)
+        return max(minutes, 0)
+    except Exception:
+        return 0
 
     result = []
 
@@ -271,25 +271,26 @@ def get_today_worklogs(current_user: dict = Depends(require_admin_or_leader)):
         staff_info = staff_map.get(row.get("user_id"), {})
 
         result.append({
-            "id": row.get("id"),
-            "user_id": row.get("user_id"),
-            "staff_name": staff_info.get("staff_name", ""),
-            "staff_code": staff_info.get("staff_code", ""),
-            "work_date": row.get("work_date") or "",
-            "property_name": row.get("property_name") or "",
-            "room_name": row.get("room_name") or "",
-            "start_time": row.get("start_time") or "",
-            "end_time": row.get("end_time") or "",
-            "break_minutes": row.get("break_minutes") or 0,
-            "work_type": row.get("work_type") or "",
-            "note": row.get("note") or "",
-            "created_at": row.get("created_at") or "",
-            "work_minutes": calc_work_minutes(
-                row.get("start_time"),
-                row.get("end_time"),
-                row.get("break_minutes"),
-            ),
-        })
+    "id": row.get("id"),
+    "user_id": row.get("user_id"),
+    "staff_name": staff_info.get("staff_name", ""),
+    "staff_code": staff_info.get("staff_code", ""),
+    "work_date": row.get("work_date") or "",
+    "property_name": row.get("property_name") or "",
+    "room_name": row.get("room_name") or "",
+    "work_start_time": row.get("work_start_time") or "",
+    "start_time": row.get("start_time") or "",
+    "end_time": row.get("end_time") or "",
+    "break_minutes": row.get("break_minutes") or 0,
+    "work_type": row.get("work_type") or "",
+    "note": row.get("note") or "",
+    "created_at": row.get("created_at") or "",
+    "work_minutes": calc_work_minutes(
+        row.get("work_start_time"),
+        row.get("end_time"),
+        row.get("break_minutes"),
+    ),
+})
 
     return {
         "date": today,
