@@ -71,6 +71,7 @@ def find_target_columns(header_row):
         "Child": -1,
         "Time Entered": -1,
         "Full Name": -1,
+        "Ref": -1,
     }
 
     for i, h in enumerate(header_row):
@@ -78,7 +79,7 @@ def find_target_columns(header_row):
         if header in target_columns:
             target_columns[header] = i
 
-    required = ["Title", "Property", "Unit", "FirstNight", "Check Out", "Status"]
+    required = ["Title", "Property", "Unit", "FirstNight", "Check Out", "Status", "Ref"]
     missing = [k for k in required if target_columns[k] == -1]
 
     if missing:
@@ -130,6 +131,7 @@ def calc_gap_nights(checkout_date: str | None, next_checkin_date: str | None):
         return max((d2 - d1).days, 0)
     except Exception:
         return 0
+
 
 def calc_stay_nights(checkin_date: str | None, checkout_date: str | None):
     if not checkin_date or not checkout_date:
@@ -222,26 +224,31 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
             check_out_raw = safe_get(row, target_columns["Check Out"])
             adult_raw = safe_get(row, target_columns["Adult"])
             child_raw = safe_get(row, target_columns["Child"])
+            ref_raw = safe_get(row, target_columns["Ref"]).strip()
+
+            if not ref_raw:
+                skipped.append({"reason": "missing ref", "row_index": i})
+                continue
 
             if status == "Cancelled":
-                skipped.append({"reason": "cancelled", "row_index": i})
+                skipped.append({"reason": "cancelled", "row_index": i, "booking_id": ref_raw})
                 continue
 
             if "ブロック" in title or "予備部屋" in title:
-                skipped.append({"reason": "blocked", "row_index": i})
+                skipped.append({"reason": "blocked", "row_index": i, "booking_id": ref_raw})
                 continue
 
             checkin_date = parse_beds24_date(first_night_raw)
             checkout_date = parse_beds24_date(check_out_raw)
 
             if not checkin_date or not checkout_date:
-                skipped.append({"reason": "missing date", "row_index": i})
+                skipped.append({"reason": "missing date", "row_index": i, "booking_id": ref_raw})
                 continue
 
             property_name, room_name = split_property_and_room(property_name_raw, unit_raw)
             room_key = f"{property_name}{room_name}"
 
-            booking_id = f"{property_name_raw}_{unit_raw}_{first_night_raw}_{check_out_raw}_{i}"
+            booking_id = ref_raw
 
             try:
                 adult_count = int(adult_raw or 0)
@@ -276,7 +283,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
     for rec in records:
         grouped[rec["room_key"]].append(rec)
 
-        # 3. 各部屋で「次の予約」を参照して cleaning_tasks 用の値を作成
+    # 3. 各部屋で「次の予約」を参照して cleaning_tasks 用の値を作成
     final_records = []
 
     for room_key, room_records in grouped.items():
