@@ -76,6 +76,7 @@ def create_task(
 @router.post("/tasks/update")
 def update_task(
     task_id: str = Body(...),
+    task_date: str | None = Body(None),
     status: str | None = Body(None),
     note: str | None = Body(None),
     assigned_staff_ids: list[str] | None = Body(None),
@@ -87,6 +88,11 @@ def update_task(
 ):
     payload = {}
 
+    # 清掃日の更新
+    # checkout_date / next_checkin_date は変更しない
+    if task_date is not None:
+        payload["task_date"] = task_date
+
     if status is not None:
         payload["status"] = status
 
@@ -95,15 +101,20 @@ def update_task(
 
     if assigned_staff_ids is not None:
         payload["assigned_staff_ids"] = assigned_staff_ids
+        payload["assigned_staff_id"] = assigned_staff_ids[0] if len(assigned_staff_ids) > 0 else None
 
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
+        payload["assigned_staff_name"] = assigned_staff_names[0] if len(assigned_staff_names) > 0 else None
 
     if assigned_staff_id is not None:
         payload["assigned_staff_id"] = assigned_staff_id
 
     if assigned_staff_name is not None:
         payload["assigned_staff_name"] = assigned_staff_name
+
+    if checker_id is not None:
+        payload["checker_id"] = checker_id
 
     if checker_name is not None:
         payload["checker_name"] = checker_name
