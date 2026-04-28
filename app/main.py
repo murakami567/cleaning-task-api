@@ -9,6 +9,8 @@ from app.routers.employee import router as employee_router
 
 from app.routers.admin_portal import router as admin_portal_router
 
+from app.routers import payroll
+
 app = FastAPI()
 
 app.add_middleware(
@@ -34,3 +36,4 @@ app.include_router(beds24_router)
 app.include_router(auth_router)
 app.include_router(employee_router)
 app.include_router(admin_portal_router)
+app.include_router(payroll.router)
