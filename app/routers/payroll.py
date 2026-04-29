@@ -573,3 +573,132 @@ def update_payroll_daily_status(
         "status": status,
         "data": res.data or [],
     }
+@router.post("/payroll/settings/staff/upsert")
+def upsert_staff_payroll_setting(
+    staff_id: str = Body(...),
+    staff_name: str = Body(...),
+    payroll_type: str = Body("piece"),
+    hourly_rate: int = Body(1300),
+    minimum_hours: float = Body(6),
+    transportation_fee: int = Body(0),
+    note: str = Body(""),
+):
+    existing = (
+        supabase.table("staff_payroll_settings")
+        .select("*")
+        .eq("staff_id", staff_id)
+        .eq("is_active", True)
+        .execute()
+    )
+
+    payload = {
+        "staff_id": staff_id,
+        "staff_name": staff_name,
+        "payroll_type": payroll_type,
+        "hourly_rate": hourly_rate,
+        "minimum_hours": minimum_hours,
+        "transportation_fee": transportation_fee,
+        "note": note,
+        "is_active": True,
+    }
+
+    if existing.data:
+        res = (
+            supabase.table("staff_payroll_settings")
+            .update(payload)
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        res = supabase.table("staff_payroll_settings").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="staff payroll setting save failed")
+
+    return res.data[0]
+
+@router.post("/payroll/rates/room/upsert")
+def upsert_room_piece_rate(
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    room_id: str | None = Body(None),
+    room_name: str = Body(...),
+    room_key: str | None = Body(None),
+    rate: int = Body(...),
+    note: str = Body(""),
+):
+    existing = (
+        supabase.table("room_piece_rates")
+        .select("*")
+        .eq("property_name", property_name)
+        .eq("room_name", room_name)
+        .eq("is_active", True)
+        .execute()
+    )
+
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "room_id": room_id,
+        "room_name": room_name,
+        "room_key": room_key,
+        "rate": rate,
+        "note": note,
+        "is_active": True,
+    }
+
+    if existing.data:
+        res = (
+            supabase.table("room_piece_rates")
+            .update(payload)
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        res = supabase.table("room_piece_rates").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="room rate save failed")
+
+    return res.data[0]
+
+@router.post("/payroll/rates/property-type/upsert")
+def upsert_property_type_piece_rate(
+    property_id: str | None = Body(None),
+    property_name: str = Body(...),
+    property_type: str = Body("通常"),
+    rate: int = Body(...),
+    note: str = Body(""),
+):
+    existing = (
+        supabase.table("property_type_piece_rates")
+        .select("*")
+        .eq("property_name", property_name)
+        .eq("property_type", property_type)
+        .eq("is_active", True)
+        .execute()
+    )
+
+    payload = {
+        "property_id": property_id,
+        "property_name": property_name,
+        "property_type": property_type,
+        "rate": rate,
+        "note": note,
+        "is_active": True,
+    }
+
+    if existing.data:
+        res = (
+            supabase.table("property_type_piece_rates")
+            .update(payload)
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        res = supabase.table("property_type_piece_rates").insert(payload).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="property type rate save failed")
+
+    return res.data[0]
