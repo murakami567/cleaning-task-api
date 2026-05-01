@@ -34,19 +34,18 @@ def login(payload: LoginRequest):
         raise HTTPException(status_code=401, detail="パスワードが違います。")
 
     # 管理画面ログイン
-    if payload.role == "admin_portal":
-        if user_role not in ["admin", "leader"]:
-            raise HTTPException(status_code=403, detail="管理画面にログインできません。")
+if payload.role == "admin_portal":
+    if user_role not in ["admin", "leader"]:
+        raise HTTPException(status_code=403, detail="管理画面にログインできません。")
 
-    # 一般画面ログイン
-    elif payload.role == "employee_portal":
-        if user_role != "staff":
-            raise HTTPException(status_code=403, detail="一般画面にログインできません。")
+# 一般画面ログイン（全員OK）
+elif payload.role == "employee_portal":
+    pass
 
-    # 個別ロール指定が来た場合
-    elif payload.role:
-        if user_role != payload.role:
-            raise HTTPException(status_code=403, detail="この画面にログインできません。")
+# 個別ロール指定が来た場合
+elif payload.role:
+    if user_role != payload.role:
+        raise HTTPException(status_code=403, detail="この画面にログインできません。")
 
     access_token = create_access_token(str(user["id"]), user_role or "")
 
