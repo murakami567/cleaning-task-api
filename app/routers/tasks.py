@@ -139,6 +139,23 @@ def update_task(
         "data": res.data,
     }
 
+# =========================================================
+# 指定日タスク（過去も未来も対応）
+# =========================================================
+@router.get("/tasks/by-date")
+def get_tasks_by_date(date: str):
+    if not date:
+        raise HTTPException(status_code=400, detail="date is required")
+
+    res = (
+        supabase.table("cleaning_tasks")
+        .select("*")
+        .eq("task_date", date)
+        .order("task_date")
+        .execute()
+    )
+
+    return res.data
 
 # =========================================================
 # 清掃外タスク
