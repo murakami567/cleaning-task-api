@@ -35,7 +35,7 @@ def login(payload: LoginRequest):
 
     # 管理画面ログイン
 if payload.role == "admin_portal":
-    if user_role not in ["admin", "leader"]:
+    if user_role not in ["admin", "leader","sub_admin"]:
         raise HTTPException(status_code=403, detail="管理画面にログインできません。")
 
 # 一般画面ログイン（全員OK）
