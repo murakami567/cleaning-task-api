@@ -1,15 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from app.logger import get_logger
 from app.routers.tasks import router as tasks_router
 from app.routers.beds24 import router as beds24_router
-
 from app.routers.auth import router as auth_router
 from app.routers.employee import router as employee_router
-
 from app.routers.admin_portal import router as admin_portal_router
-
 from app.routers import payroll
+
+logger = get_logger(__name__)
 
 app = FastAPI()
 
@@ -17,7 +18,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://cleaning-task-admin.onrender.com",
-        "https://cleaning-task-gusk.onrender.com",  # ←追加
+        "https://cleaning-task-gusk.onrender.com",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
@@ -25,6 +26,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        f"Unhandled error: {request.method} {request.url.path} - {exc}",
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "サーバーエラーが発生しました。"},
+    )
+
 
 @app.get("/")
 def root():
@@ -37,3 +51,5 @@ app.include_router(auth_router)
 app.include_router(employee_router)
 app.include_router(admin_portal_router)
 app.include_router(payroll.router)
+
+logger.info("cleaning-task-api started")

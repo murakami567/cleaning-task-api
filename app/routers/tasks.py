@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Body, HTTPException
 
 from app.db import supabase
+from app.logger import get_logger
 
 router = APIRouter(tags=["tasks"])
+logger = get_logger(__name__)
 
 
 # =========================================================
@@ -13,14 +15,18 @@ def get_today_tasks():
     from datetime import date
 
     today = date.today().isoformat()
+    try:
+        res = (
+            supabase.table("cleaning_tasks")
+            .select("*")
+            .eq("task_date", today)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_today_tasks failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="本日のタスク取得に失敗しました。")
 
-    res = (
-        supabase.table("cleaning_tasks")
-        .select("*")
-        .eq("task_date", today)
-        .execute()
-    )
-
+    logger.info(f"get_today_tasks: date={today} count={len(res.data or [])}")
     return res.data
 
 
@@ -29,15 +35,19 @@ def get_future_tasks():
     from datetime import date
 
     today = date.today().isoformat()
+    try:
+        res = (
+            supabase.table("cleaning_tasks")
+            .select("*")
+            .gt("task_date", today)
+            .order("task_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_future_tasks failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="将来のタスク取得に失敗しました。")
 
-    res = (
-        supabase.table("cleaning_tasks")
-        .select("*")
-        .gt("task_date", today)
-        .order("task_date")
-        .execute()
-    )
-
+    logger.info(f"get_future_tasks: count={len(res.data or [])}")
     return res.data
 
 
@@ -65,11 +75,16 @@ def create_task(
         "source": "manual",
     }
 
-    res = supabase.table("cleaning_tasks").insert(payload).execute()
+    try:
+        res = supabase.table("cleaning_tasks").insert(payload).execute()
+    except Exception as e:
+        logger.error(f"create_task failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="task creation failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="task creation failed")
 
+    logger.info(f"create_task: id={res.data[0].get('id')}")
     return res.data[0]
 
 
@@ -130,8 +145,10 @@ def update_task(
             .execute()
         )
     except Exception as e:
+        logger.error(f"update_task failed: task_id={task_id} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"supabase update failed: {str(e)}")
 
+    logger.info(f"update_task: task_id={task_id}")
     return {
         "ok": True,
         "task_id": task_id,
@@ -147,14 +164,19 @@ def get_tasks_by_date(date: str):
     if not date:
         raise HTTPException(status_code=400, detail="date is required")
 
-    res = (
-        supabase.table("cleaning_tasks")
-        .select("*")
-        .eq("task_date", date)
-        .order("task_date")
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("cleaning_tasks")
+            .select("*")
+            .eq("task_date", date)
+            .order("task_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_tasks_by_date failed: date={date} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="タスク取得に失敗しました。")
 
+    logger.info(f"get_tasks_by_date: date={date} count={len(res.data or [])}")
     return res.data
 
 # =========================================================
@@ -162,12 +184,18 @@ def get_tasks_by_date(date: str):
 # =========================================================
 @router.get("/non-cleaning-tasks")
 def get_non_cleaning_tasks():
-    res = (
-        supabase.table("non_cleaning_tasks")
-        .select("*")
-        .order("task_date")
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("non_cleaning_tasks")
+            .select("*")
+            .order("task_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_non_cleaning_tasks failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="非清掃タスク取得に失敗しました。")
+
+    logger.info(f"get_non_cleaning_tasks: count={len(res.data or [])}")
     return res.data
 
 
@@ -201,11 +229,16 @@ def create_non_cleaning_task(
     payload["assignee_id"] = assignee_ids[0] if assignee_ids and len(assignee_ids) > 0 else None
     payload["assignee_name"] = assignee_names[0] if assignee_names and len(assignee_names) > 0 else None
 
-    res = supabase.table("non_cleaning_tasks").insert(payload).execute()
+    try:
+        res = supabase.table("non_cleaning_tasks").insert(payload).execute()
+    except Exception as e:
+        logger.error(f"create_non_cleaning_task failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="non cleaning task creation failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="non cleaning task creation failed")
 
+    logger.info(f"create_non_cleaning_task: id={res.data[0].get('id')}")
     return res.data[0]
 
 
@@ -251,27 +284,38 @@ def update_non_cleaning_task(
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
 
-    res = (
-        supabase.table("non_cleaning_tasks")
-        .update(payload)
-        .eq("id", task_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("non_cleaning_tasks")
+            .update(payload)
+            .eq("id", task_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_non_cleaning_task failed: task_id={task_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="non cleaning task update failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="non cleaning task update failed")
 
+    logger.info(f"update_non_cleaning_task: task_id={task_id}")
     return res.data[0]
 
 
 @router.post("/non-cleaning-tasks/delete")
 def delete_non_cleaning_task(task_id: str = Body(...)):
-    res = (
-        supabase.table("non_cleaning_tasks")
-        .delete()
-        .eq("id", task_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("non_cleaning_tasks")
+            .delete()
+            .eq("id", task_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"delete_non_cleaning_task failed: task_id={task_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="非清掃タスクの削除に失敗しました。")
+
+    logger.info(f"delete_non_cleaning_task: task_id={task_id}")
     return {"ok": True, "data": res.data}
 
 
@@ -280,13 +324,19 @@ def delete_non_cleaning_task(task_id: str = Body(...)):
 # =========================================================
 @router.get("/properties")
 def get_properties():
-    res = (
-        supabase.table("properties")
-        .select("*")
-        .order("sort_order")
-        .order("property_name")
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("properties")
+            .select("*")
+            .order("sort_order")
+            .order("property_name")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_properties failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="物件情報の取得に失敗しました。")
+
+    logger.info(f"get_properties: count={len(res.data or [])}")
     return res.data or []
 
 
@@ -306,15 +356,20 @@ def create_property(
         "is_active": is_active,
     }
 
-    res = (
-        supabase.table("properties")
-        .insert(payload)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("properties")
+            .insert(payload)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"create_property failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="property create failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="property create failed")
 
+    logger.info(f"create_property: id={res.data[0].get('id')}")
     return res.data[0]
 
 
@@ -343,32 +398,43 @@ def update_property(
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
 
-    res = (
-        supabase.table("properties")
-        .update(payload)
-        .eq("id", property_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("properties")
+            .update(payload)
+            .eq("id", property_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_property failed: property_id={property_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="property update failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="property update failed")
 
+    logger.info(f"update_property: property_id={property_id}")
     return res.data[0]
 
 
 @router.get("/rooms")
 def get_rooms(property_id: str | None = None):
-    query = (
-        supabase.table("rooms")
-        .select("*")
-        .order("room_sort_order")
-        .order("room_name")
-    )
+    try:
+        query = (
+            supabase.table("rooms")
+            .select("*")
+            .order("room_sort_order")
+            .order("room_name")
+        )
 
-    if property_id:
-        query = query.eq("property_id", property_id)
+        if property_id:
+            query = query.eq("property_id", property_id)
 
-    res = query.execute()
+        res = query.execute()
+    except Exception as e:
+        logger.error(f"get_rooms failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="部屋情報の取得に失敗しました。")
+
+    logger.info(f"get_rooms: count={len(res.data or [])}")
     return res.data or []
 
 
@@ -394,15 +460,20 @@ def create_room(
         "is_active": is_active,
     }
 
-    res = (
-        supabase.table("rooms")
-        .insert(payload)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("rooms")
+            .insert(payload)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"create_room failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="room create failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="room create failed")
 
+    logger.info(f"create_room: id={res.data[0].get('id')}")
     return res.data[0]
 
 
@@ -440,16 +511,21 @@ def update_room(
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
 
-    res = (
-        supabase.table("rooms")
-        .update(payload)
-        .eq("id", room_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("rooms")
+            .update(payload)
+            .eq("id", room_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_room failed: room_id={room_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="room update failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="room update failed")
 
+    logger.info(f"update_room: room_id={room_id}")
     return res.data[0]
 
 
@@ -502,15 +578,20 @@ def bulk_create_rooms(
         })
         current_sort += 1
 
-    res = (
-        supabase.table("rooms")
-        .insert(payloads)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("rooms")
+            .insert(payloads)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"bulk_create_rooms failed: property_id={property_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="bulk room create failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="bulk room create failed")
 
+    logger.info(f"bulk_create_rooms: property_id={property_id} count={len(res.data)}")
     return {
         "ok": True,
         "count": len(res.data),
@@ -525,13 +606,18 @@ def delete_room(payload: dict = Body(...)):
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
 
-    res = (
-        supabase.table("rooms")
-        .delete()
-        .eq("id", room_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("rooms")
+            .delete()
+            .eq("id", room_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"delete_room failed: room_id={room_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="部屋の削除に失敗しました。")
 
+    logger.info(f"delete_room: room_id={room_id}")
     return {"ok": True, "data": res.data}
 
 # =========================================================
@@ -540,27 +626,39 @@ def delete_room(payload: dict = Body(...)):
 
 @router.get("/shifts")
 def get_shifts(shift_date: str | None = None):
-    query = (
-        supabase.table("shift_days")
-        .select("*, shift_entries(*, staff_members(*))")
-        .order("shift_date")
-    )
+    try:
+        query = (
+            supabase.table("shift_days")
+            .select("*, shift_entries(*, staff_members(*))")
+            .order("shift_date")
+        )
 
-    if shift_date:
-        query = query.eq("shift_date", shift_date)
+        if shift_date:
+            query = query.eq("shift_date", shift_date)
 
-    res = query.execute()
+        res = query.execute()
+    except Exception as e:
+        logger.error(f"get_shifts failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="シフト情報の取得に失敗しました。")
+
+    logger.info(f"get_shifts: count={len(res.data or [])}")
     return res.data or []
 
 @router.get("/staffs")
 def get_staffs():
-    res = (
-        supabase.table("staff_members")
-        .select("*")
-        .order("sort_order")
-        .order("staff_name")
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("staff_members")
+            .select("*")
+            .order("sort_order")
+            .order("staff_name")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_staffs failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スタッフ情報の取得に失敗しました。")
+
+    logger.info(f"get_staffs: count={len(res.data or [])}")
     return res.data or []
 
 # =========================================================
@@ -592,25 +690,28 @@ def upsert_staff(
         payload["password"] = password
 
     # 更新
-    if staff_id:
-        res = (
-            supabase.table("staff_members")
-            .update(payload)
-            .eq("id", staff_id)
-            .execute()
-        )
-
-    # 新規
-    else:
-        res = (
-            supabase.table("staff_members")
-            .insert(payload)
-            .execute()
-        )
+    try:
+        if staff_id:
+            res = (
+                supabase.table("staff_members")
+                .update(payload)
+                .eq("id", staff_id)
+                .execute()
+            )
+        else:
+            res = (
+                supabase.table("staff_members")
+                .insert(payload)
+                .execute()
+            )
+    except Exception as e:
+        logger.error(f"upsert_staff failed: staff_id={staff_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="staff save failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="staff save failed")
 
+    logger.info(f"upsert_staff: staff_id={res.data[0].get('id')}")
     return res.data[0]
 
 @router.get("/shift-board")
@@ -618,41 +719,45 @@ def get_shift_board(year: int, month: int):
     from datetime import date, timedelta
     from collections import defaultdict
 
-    month_start = date(year, month, 1)
+    try:
+        month_start = date(year, month, 1)
 
-    if month == 12:
-        month_end = date(year + 1, 1, 1)
-    else:
-        month_end = date(year, month + 1, 1)
+        if month == 12:
+            month_end = date(year + 1, 1, 1)
+        else:
+            month_end = date(year, month + 1, 1)
 
-    # 週表示で月跨ぎしても件数が欠けないように前後7日分広げる
-    range_start = month_start - timedelta(days=7)
-    range_end = month_end + timedelta(days=7)
+        # 週表示で月跨ぎしても件数が欠けないように前後7日分広げる
+        range_start = month_start - timedelta(days=7)
+        range_end = month_end + timedelta(days=7)
 
-    staff_res = (
-        supabase.table("staff_members")
-        .select("*")
-        .order("sort_order")
-        .order("staff_name")
-        .execute()
-    )
+        staff_res = (
+            supabase.table("staff_members")
+            .select("*")
+            .order("sort_order")
+            .order("staff_name")
+            .execute()
+        )
 
-    day_res = (
-        supabase.table("shift_days")
-        .select("*, shift_entries(*, staff_members(*))")
-        .gte("shift_date", range_start.isoformat())
-        .lt("shift_date", range_end.isoformat())
-        .order("shift_date")
-        .execute()
-    )
+        day_res = (
+            supabase.table("shift_days")
+            .select("*, shift_entries(*, staff_members(*))")
+            .gte("shift_date", range_start.isoformat())
+            .lt("shift_date", range_end.isoformat())
+            .order("shift_date")
+            .execute()
+        )
 
-    task_res = (
-        supabase.table("cleaning_tasks")
-        .select("task_date")
-        .gte("task_date", range_start.isoformat())
-        .lt("task_date", range_end.isoformat())
-        .execute()
-    )
+        task_res = (
+            supabase.table("cleaning_tasks")
+            .select("task_date")
+            .gte("task_date", range_start.isoformat())
+            .lt("task_date", range_end.isoformat())
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_shift_board failed: year={year} month={month} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="シフトボードの取得に失敗しました。")
 
     cleaning_counts = defaultdict(int)
     for row in task_res.data or []:
@@ -682,6 +787,7 @@ def get_shift_board(year: int, month: int):
         attendance = attendance_counts.get(d, 0)
         workload[d] = round(clean / attendance, 1) if attendance > 0 else 0
 
+    logger.info(f"get_shift_board: year={year} month={month}")
     return {
         "staffs": staff_res.data or [],
         "days": day_res.data or [],
@@ -818,12 +924,18 @@ def upsert_shift_entry(
 # =========================================================
 @router.get("/openings")
 def get_openings():
-    res = (
-        supabase.table("opening_projects")
-        .select("*")
-        .order("due_date")
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("opening_projects")
+            .select("*")
+            .order("due_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_openings failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="オープン進捗の取得に失敗しました。")
+
+    logger.info(f"get_openings: count={len(res.data or [])}")
     return res.data or []
 
 
@@ -853,11 +965,16 @@ def create_opening(
         "memo": memo,
     }
 
-    res = supabase.table("opening_projects").insert(payload).execute()
+    try:
+        res = supabase.table("opening_projects").insert(payload).execute()
+    except Exception as e:
+        logger.error(f"create_opening failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="opening creation failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="opening creation failed")
 
+    logger.info(f"create_opening: id={res.data[0].get('id')}")
     return res.data[0]
 
 
@@ -901,27 +1018,38 @@ def update_opening(
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
 
-    res = (
-        supabase.table("opening_projects")
-        .update(payload)
-        .eq("id", opening_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("opening_projects")
+            .update(payload)
+            .eq("id", opening_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_opening failed: opening_id={opening_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="opening update failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="opening update failed")
 
+    logger.info(f"update_opening: opening_id={opening_id}")
     return res.data[0]
 
 
 @router.post("/openings/delete")
 def delete_opening(opening_id: str = Body(...)):
-    res = (
-        supabase.table("opening_projects")
-        .delete()
-        .eq("id", opening_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("opening_projects")
+            .delete()
+            .eq("id", opening_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"delete_opening failed: opening_id={opening_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="オープン進捗の削除に失敗しました。")
+
+    logger.info(f"delete_opening: opening_id={opening_id}")
     return {"ok": True, "data": res.data}
 
 # =========================================================
@@ -936,8 +1064,10 @@ def get_facilities():
             .order("created_at")
             .execute()
         )
+        logger.info(f"get_facilities: count={len(res.data or [])}")
         return res.data or []
     except Exception as e:
+        logger.error(f"get_facilities failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"facilities fetch failed: {str(e)}")
 
 
@@ -947,8 +1077,10 @@ def create_facility(payload: dict = Body(...)):
         res = supabase.table("facility_tasks").insert(payload).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="facility create failed")
+        logger.info(f"create_facility: id={res.data[0].get('id')}")
         return res.data[0]
     except Exception as e:
+        logger.error(f"create_facility failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"facility create failed: {str(e)}")
 
 
@@ -998,8 +1130,10 @@ def update_facility(
         )
         if not res.data:
             raise HTTPException(status_code=500, detail="facility update failed")
+        logger.info(f"update_facility: facility_id={facility_id}")
         return res.data[0]
     except Exception as e:
+        logger.error(f"update_facility failed: facility_id={facility_id} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"facility update failed: {str(e)}")
 
 
@@ -1012,8 +1146,10 @@ def delete_facility(facility_id: str = Body(...)):
             .eq("id", facility_id)
             .execute()
         )
+        logger.info(f"delete_facility: facility_id={facility_id}")
         return {"ok": True, "data": res.data}
     except Exception as e:
+        logger.error(f"delete_facility failed: facility_id={facility_id} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"facility delete failed: {str(e)}")
 
 # =========================================================

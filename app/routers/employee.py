@@ -5,27 +5,33 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.db import supabase
+from app.logger import get_logger
 from app.services.auth_service import get_current_user_id
 
 router = APIRouter(prefix="/api/employee", tags=["employee"])
+logger = get_logger(__name__)
 
 
 @router.get("/me")
 def get_me(user_id: str = Depends(get_current_user_id)):
-    res = (
-        supabase
-        .table("staff_members")
-        .select("id, staff_name, staff_code, role")
-        .eq("id", user_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("staff_members")
+            .select("id, staff_name, staff_code, role")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_me failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="ユーザー情報の取得に失敗しました。")
 
     if not res.data:
         return {"user": None}
 
     row = res.data[0]
-
+    logger.info(f"get_me: user_id={user_id}")
     return {
         "user": {
             "id": row.get("id"),
@@ -39,66 +45,70 @@ def get_me(user_id: str = Depends(get_current_user_id)):
 @router.get("/home")
 def get_home(user_id: str = Depends(get_current_user_id)):
     today = date.today().isoformat()
+    try:
+        staff_res = (
+            supabase
+            .table("staff_members")
+            .select("id, staff_name")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
 
-    staff_res = (
-        supabase
-        .table("staff_members")
-        .select("id, staff_name")
-        .eq("id", user_id)
-        .limit(1)
-        .execute()
-    )
+        staff_name = ""
+        if staff_res.data:
+            staff_name = staff_res.data[0].get("staff_name") or ""
 
-    staff_name = ""
-    if staff_res.data:
-        staff_name = staff_res.data[0].get("staff_name") or ""
+        today_task_res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("id")
+            .eq("task_date", today)
+            .contains("assigned_staff_ids", [user_id])
+            .execute()
+        )
 
-    today_task_res = (
-        supabase
-        .table("cleaning_tasks")
-        .select("id")
-        .eq("task_date", today)
-        .contains("assigned_staff_ids", [user_id])
-        .execute()
-    )
+        upcoming_task_res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("id")
+            .gt("task_date", today)
+            .contains("assigned_staff_ids", [user_id])
+            .execute()
+        )
 
-    upcoming_task_res = (
-        supabase
-        .table("cleaning_tasks")
-        .select("id")
-        .gt("task_date", today)
-        .contains("assigned_staff_ids", [user_id])
-        .execute()
-    )
+        today_schedule_res = (
+            supabase
+            .table("shift_days")
+            .select("id, shift_entries!inner(id, staff_id)")
+            .eq("shift_date", today)
+            .eq("shift_entries.staff_id", user_id)
+            .execute()
+        )
 
-    today_schedule_res = (
-        supabase
-        .table("shift_days")
-        .select("id, shift_entries!inner(id, staff_id)")
-        .eq("shift_date", today)
-        .eq("shift_entries.staff_id", user_id)
-        .execute()
-    )
+        today_check_res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("id")
+            .eq("task_date", today)
+            .eq("checker_name", staff_name)
+            .execute()
+        ) if staff_name else None
 
-    today_check_res = (
-        supabase
-        .table("cleaning_tasks")
-        .select("id")
-        .eq("task_date", today)
-        .eq("checker_name", staff_name)
-        .execute()
-    ) if staff_name else None
-
-    message_res = (
-        supabase
-        .table("portal_messages")
-        .select("id, message, target_date, updated_at")
-        .eq("target_date", today)
-        .order("updated_at", desc=True)
-        .execute()
-    )
+        message_res = (
+            supabase
+            .table("portal_messages")
+            .select("id, message, target_date, updated_at")
+            .eq("target_date", today)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_home failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="ホーム情報の取得に失敗しました。")
 
     today_messages = message_res.data or []
+    logger.info(f"get_home: user_id={user_id} today={today}")
 
     return {
         "todayTaskCount": len(today_task_res.data or []),
@@ -110,55 +120,59 @@ def get_home(user_id: str = Depends(get_current_user_id)):
         "todayMessages": today_messages,
     }
 
+
 @router.get("/tasks")
 def get_tasks(user_id: str = Depends(get_current_user_id)):
     today = date.today().isoformat()
+    try:
+        staff_res = (
+            supabase
+            .table("staff_members")
+            .select("id, staff_name")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
 
-    staff_res = (
-        supabase
-        .table("staff_members")
-        .select("id, staff_name")
-        .eq("id", user_id)
-        .limit(1)
-        .execute()
-    )
+        staff_name = ""
+        if staff_res.data:
+            staff_name = staff_res.data[0].get("staff_name") or ""
 
-    staff_name = ""
-    if staff_res.data:
-        staff_name = staff_res.data[0].get("staff_name") or ""
-
-    cleaning_res = (
-        supabase
-        .table("cleaning_tasks")
-        .select("*")
-        .contains("assigned_staff_ids", [user_id])
-        .eq("task_date", today)
-        .order("task_date")
-        .execute()
-    )
-
-    if staff_name:
-        check_res = (
+        cleaning_res = (
             supabase
             .table("cleaning_tasks")
             .select("*")
-            .eq("checker_name", staff_name)
+            .contains("assigned_staff_ids", [user_id])
             .eq("task_date", today)
             .order("task_date")
             .execute()
         )
-    else:
-        check_res = None
 
-    other_res = (
-        supabase
-        .table("non_cleaning_tasks")
-        .select("*")
-        .contains("assignee_ids", [user_id])
-        .eq("task_date", today)
-        .order("task_date")
-        .execute()
-    )
+        if staff_name:
+            check_res = (
+                supabase
+                .table("cleaning_tasks")
+                .select("*")
+                .eq("checker_name", staff_name)
+                .eq("task_date", today)
+                .order("task_date")
+                .execute()
+            )
+        else:
+            check_res = None
+
+        other_res = (
+            supabase
+            .table("non_cleaning_tasks")
+            .select("*")
+            .contains("assignee_ids", [user_id])
+            .eq("task_date", today)
+            .order("task_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_tasks failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="タスク情報の取得に失敗しました。")
 
     cleaning_tasks = [
         map_cleaning_task(row, "cleaning")
@@ -173,6 +187,11 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
         for row in (other_res.data or [])
     ]
 
+    logger.info(
+        f"get_tasks: user_id={user_id} cleaning={len(cleaning_tasks)}"
+        f" check={len(check_tasks)} other={len(other_tasks)}"
+    )
+
     return {
         "otherTasks": other_tasks,
         "cleaningTasks": cleaning_tasks,
@@ -186,18 +205,21 @@ def get_tasks(user_id: str = Depends(get_current_user_id)):
 
 @router.get("/schedule")
 def get_schedule(user_id: str = Depends(get_current_user_id)):
-    res = (
-        supabase
-        .table("shift_entries")
-        .select("*, shift_days(*)")
-        .eq("staff_id", user_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("shift_entries")
+            .select("*, shift_days(*)")
+            .eq("staff_id", user_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_schedule failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュールの取得に失敗しました。")
 
     schedules = []
     for row in res.data or []:
         shift_day = row.get("shift_days") or {}
-
         schedules.append({
             "id": row.get("id"),
             "date": shift_day.get("shift_date", ""),
@@ -211,6 +233,7 @@ def get_schedule(user_id: str = Depends(get_current_user_id)):
         })
 
     schedules.sort(key=lambda x: (x["date"], x["startTime"]))
+    logger.info(f"get_schedule: user_id={user_id} count={len(schedules)}")
     return {"schedules": schedules}
 
 
@@ -233,16 +256,20 @@ def get_schedule_calendar(
     else:
         next_month_start = date(target_month.year, target_month.month + 1, 1)
 
-    res = (
-        supabase
-        .table("cleaning_tasks")
-        .select("*")
-        .contains("assigned_staff_ids", [user_id])
-        .gte("task_date", month_start.isoformat())
-        .lt("task_date", next_month_start.isoformat())
-        .order("task_date")
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("*")
+            .contains("assigned_staff_ids", [user_id])
+            .gte("task_date", month_start.isoformat())
+            .lt("task_date", next_month_start.isoformat())
+            .order("task_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_schedule_calendar failed: user_id={user_id} month={month} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="カレンダー情報の取得に失敗しました。")
 
     rows = res.data or []
 
@@ -286,10 +313,8 @@ def get_schedule_calendar(
             "totalCount": value["cleaningCount"] + value["inspectionCount"],
         })
 
-    return {
-        "month": month,
-        "days": result,
-    }
+    logger.info(f"get_schedule_calendar: user_id={user_id} month={month} days={len(result)}")
+    return {"month": month, "days": result}
 
 
 @router.post("/worklogs")
@@ -310,11 +335,16 @@ def create_worklog(
         "note": payload.get("note"),
     }
 
-    res = supabase.table("worklogs").insert(insert_data).execute()
+    try:
+        res = supabase.table("worklogs").insert(insert_data).execute()
+    except Exception as e:
+        logger.error(f"create_worklog failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="実働登録に失敗しました。")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="実働登録に失敗しました。")
 
+    logger.info(f"create_worklog: user_id={user_id} date={insert_data.get('work_date')}")
     return {"message": "実働を登録しました。", "data": res.data[0]}
 
 
@@ -329,14 +359,18 @@ def update_password(
     if not current_password or not new_password:
         raise HTTPException(status_code=400, detail="パスワード情報が不足しています。")
 
-    user_res = (
-        supabase
-        .table("staff_members")
-        .select("id, password")
-        .eq("id", user_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        user_res = (
+            supabase
+            .table("staff_members")
+            .select("id, password")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_password DB error: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="パスワード変更に失敗しました。")
 
     if not user_res.data:
         raise HTTPException(status_code=404, detail="ユーザーが見つかりません。")
@@ -344,19 +378,25 @@ def update_password(
     user = user_res.data[0]
 
     if user.get("password") != current_password:
+        logger.warning(f"update_password: wrong current password user_id={user_id}")
         raise HTTPException(status_code=400, detail="現在のパスワードが正しくありません。")
 
-    update_res = (
-        supabase
-        .table("staff_members")
-        .update({"password": new_password})
-        .eq("id", user_id)
-        .execute()
-    )
+    try:
+        update_res = (
+            supabase
+            .table("staff_members")
+            .update({"password": new_password})
+            .eq("id", user_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_password update failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="パスワード変更に失敗しました。")
 
     if not update_res.data:
         raise HTTPException(status_code=500, detail="パスワード変更に失敗しました。")
 
+    logger.info(f"update_password: user_id={user_id}")
     return {"message": "パスワードを変更しました。"}
 
 

@@ -3,9 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import supabase
+from app.logger import get_logger
 from app.services.auth_service import require_admin_or_leader
 
 router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal"])
+logger = get_logger(__name__)
 
 
 class TodayMessageBody(BaseModel):
@@ -25,24 +27,28 @@ class PortalScheduleBody(BaseModel):
 @router.get("/home")
 def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
     today = date.today().isoformat()
+    try:
+        message_res = (
+            supabase
+            .table("portal_messages")
+            .select("*")
+            .eq("target_date", today)
+            .order("updated_at", desc=True)
+            .execute()
+        )
 
-    message_res = (
-        supabase
-        .table("portal_messages")
-        .select("*")
-        .eq("target_date", today)
-        .order("updated_at", desc=True)
-        .execute()
-    )
+        shift_res = (
+            supabase
+            .table("shift_days")
+            .select("*, shift_entries(*, staff_members(*))")
+            .eq("shift_date", today)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_admin_home failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="ホーム情報の取得に失敗しました。")
 
-    shift_res = (
-        supabase
-        .table("shift_days")
-        .select("*, shift_entries(*, staff_members(*))")
-        .eq("shift_date", today)
-        .execute()
-    )
-
+    logger.info(f"get_admin_home: today={today}")
     return {
         "todayDate": today,
         "todayMessages": message_res.data or [],
@@ -65,17 +71,22 @@ def save_today_message(
     if not message:
         raise HTTPException(status_code=400, detail="message は必須です。")
 
-    res = (
-        supabase
-        .table("portal_messages")
-        .insert({
-            "target_date": target_date,
-            "message": message,
-            "updated_by": user_id,
-        })
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("portal_messages")
+            .insert({
+                "target_date": target_date,
+                "message": message,
+                "updated_by": user_id,
+            })
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"save_today_message failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="メッセージの保存に失敗しました。")
 
+    logger.info(f"save_today_message: user_id={user_id} date={target_date}")
     return {"ok": True, "data": res.data}
 
 
@@ -91,16 +102,21 @@ def get_admin_calendar(
     else:
         end_date = date(year, month + 1, 1).isoformat()
 
-    res = (
-        supabase
-        .table("shift_days")
-        .select("*, shift_entries(*, staff_members(*))")
-        .gte("shift_date", start_date)
-        .lt("shift_date", end_date)
-        .order("shift_date")
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("shift_days")
+            .select("*, shift_entries(*, staff_members(*))")
+            .gte("shift_date", start_date)
+            .lt("shift_date", end_date)
+            .order("shift_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_admin_calendar failed: year={year} month={month} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="カレンダー情報の取得に失敗しました。")
 
+    logger.info(f"get_admin_calendar: year={year} month={month} days={len(res.data or [])}")
     return {"days": res.data or []}
 
 
@@ -116,16 +132,21 @@ def get_calendar_schedules(
     else:
         month_end = date(year, month + 1, 1)
 
-    res = (
-        supabase
-        .table("portal_schedules")
-        .select("*")
-        .lte("start_date", month_end.isoformat())
-        .gte("end_date", month_start.isoformat())
-        .order("start_date")
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("portal_schedules")
+            .select("*")
+            .lte("start_date", month_end.isoformat())
+            .gte("end_date", month_start.isoformat())
+            .order("start_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_calendar_schedules failed: year={year} month={month} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュールの取得に失敗しました。")
 
+    logger.info(f"get_calendar_schedules: year={year} month={month} count={len(res.data or [])}")
     return {"schedules": res.data or []}
 
 
@@ -145,21 +166,26 @@ def create_calendar_schedule(
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="title は必須です。")
 
-    res = (
-        supabase
-        .table("portal_schedules")
-        .insert({
-            "start_date": payload.start_date,
-            "end_date": payload.end_date,
-            "assignee_ids": payload.assignee_ids or [],
-            "assignee_names": payload.assignee_names or [],
-            "title": payload.title.strip(),
-            "description": payload.description.strip(),
-            "created_by": user_id,
-        })
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("portal_schedules")
+            .insert({
+                "start_date": payload.start_date,
+                "end_date": payload.end_date,
+                "assignee_ids": payload.assignee_ids or [],
+                "assignee_names": payload.assignee_names or [],
+                "title": payload.title.strip(),
+                "description": payload.description.strip(),
+                "created_by": user_id,
+            })
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"create_calendar_schedule failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュールの作成に失敗しました。")
 
+    logger.info(f"create_calendar_schedule: user_id={user_id} title={payload.title}")
     return {"ok": True, "data": res.data}
 
 
@@ -178,22 +204,27 @@ def update_calendar_schedule(
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="title は必須です。")
 
-    res = (
-        supabase
-        .table("portal_schedules")
-        .update({
-            "start_date": payload.start_date,
-            "end_date": payload.end_date,
-            "assignee_ids": payload.assignee_ids or [],
-            "assignee_names": payload.assignee_names or [],
-            "title": payload.title.strip(),
-            "description": payload.description.strip(),
-            "updated_at": "now()",
-        })
-        .eq("id", schedule_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("portal_schedules")
+            .update({
+                "start_date": payload.start_date,
+                "end_date": payload.end_date,
+                "assignee_ids": payload.assignee_ids or [],
+                "assignee_names": payload.assignee_names or [],
+                "title": payload.title.strip(),
+                "description": payload.description.strip(),
+                "updated_at": "now()",
+            })
+            .eq("id", schedule_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_calendar_schedule failed: id={schedule_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュールの更新に失敗しました。")
 
+    logger.info(f"update_calendar_schedule: id={schedule_id}")
     return {"ok": True, "data": res.data}
 
 
@@ -202,80 +233,84 @@ def delete_calendar_schedule(
     schedule_id: str,
     current_user: dict = Depends(require_admin_or_leader),
 ):
-    res = (
-        supabase
-        .table("portal_schedules")
-        .delete()
-        .eq("id", schedule_id)
-        .execute()
-    )
+    try:
+        res = (
+            supabase
+            .table("portal_schedules")
+            .delete()
+            .eq("id", schedule_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"delete_calendar_schedule failed: id={schedule_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュールの削除に失敗しました。")
 
+    logger.info(f"delete_calendar_schedule: id={schedule_id}")
     return {"ok": True, "data": res.data}
+
 
 @router.get("/worklogs/today")
 def get_today_worklogs(
     date: str | None = None,
-    current_user: dict = Depends(require_admin_or_leader)
+    current_user: dict = Depends(require_admin_or_leader),
 ):
     from datetime import datetime
 
     target_date = date or datetime.today().strftime("%Y-%m-%d")
 
-    worklog_res = (
-        supabase
-        .table("worklogs")
-        .select("*")
-        .eq("work_date", target_date)
-        .order("start_time")
-        .execute()
-    )
-
-    worklogs = worklog_res.data or []
-
-    user_ids = list({
-        row.get("user_id")
-        for row in worklogs
-        if row.get("user_id")
-    })
-
-    staff_map = {}
-
-    if user_ids:
-        staff_res = (
+    try:
+        worklog_res = (
             supabase
-            .table("staff_members")
-            .select("id, staff_name, staff_code")
-            .in_("id", user_ids)
+            .table("worklogs")
+            .select("*")
+            .eq("work_date", target_date)
+            .order("start_time")
             .execute()
         )
 
-        for row in staff_res.data or []:
-            staff_map[row.get("id")] = {
-                "staff_name": row.get("staff_name") or "",
-                "staff_code": row.get("staff_code") or "",
-            }
+        worklogs = worklog_res.data or []
+
+        user_ids = list({
+            row.get("user_id")
+            for row in worklogs
+            if row.get("user_id")
+        })
+
+        staff_map = {}
+
+        if user_ids:
+            staff_res = (
+                supabase
+                .table("staff_members")
+                .select("id, staff_name, staff_code")
+                .in_("id", user_ids)
+                .execute()
+            )
+
+            for row in staff_res.data or []:
+                staff_map[row.get("id")] = {
+                    "staff_name": row.get("staff_name") or "",
+                    "staff_code": row.get("staff_code") or "",
+                }
+    except Exception as e:
+        logger.error(f"get_today_worklogs failed: date={target_date} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="実働ログの取得に失敗しました。")
 
     def calc_work_minutes(work_start_time: str | None, end_time: str | None, break_minutes: int | None):
         if not work_start_time or not end_time:
             return 0
-
         try:
             start_dt = datetime.strptime(work_start_time, "%H:%M")
             end_dt = datetime.strptime(end_time, "%H:%M")
-
             minutes = int((end_dt - start_dt).total_seconds() / 60)
             minutes -= int(break_minutes or 0)
-
             return max(minutes, 0)
-
         except Exception:
             return 0
 
     result = []
-
     for row in worklogs:
         staff_info = staff_map.get(row.get("user_id"), {})
-
         result.append({
             "id": row.get("id"),
             "user_id": row.get("user_id"),
@@ -298,7 +333,5 @@ def get_today_worklogs(
             ),
         })
 
-    return {
-        "date": target_date,
-        "worklogs": result,
-    }
+    logger.info(f"get_today_worklogs: date={target_date} count={len(result)}")
+    return {"date": target_date, "worklogs": result}

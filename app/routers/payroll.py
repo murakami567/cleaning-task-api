@@ -4,8 +4,10 @@ import calendar
 from collections import defaultdict
 
 from app.db import supabase
+from app.logger import get_logger
 
 router = APIRouter(tags=["payroll"])
+logger = get_logger(__name__)
 
 
 # =========================================================
@@ -146,29 +148,34 @@ def extract_work_hours(row: dict):
 
 @router.get("/payroll/settings")
 def get_payroll_settings():
-    staff_settings = (
-        supabase.table("staff_payroll_settings")
-        .select("*")
-        .order("staff_name")
-        .execute()
-    )
+    try:
+        staff_settings = (
+            supabase.table("staff_payroll_settings")
+            .select("*")
+            .order("staff_name")
+            .execute()
+        )
 
-    room_rates = (
-        supabase.table("room_piece_rates")
-        .select("*")
-        .order("property_name")
-        .order("room_name")
-        .execute()
-    )
+        room_rates = (
+            supabase.table("room_piece_rates")
+            .select("*")
+            .order("property_name")
+            .order("room_name")
+            .execute()
+        )
 
-    property_type_rates = (
-        supabase.table("property_type_piece_rates")
-        .select("*")
-        .order("property_name")
-        .order("property_type")
-        .execute()
-    )
+        property_type_rates = (
+            supabase.table("property_type_piece_rates")
+            .select("*")
+            .order("property_name")
+            .order("property_type")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_payroll_settings failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="給与設定の取得に失敗しました。")
 
+    logger.info("get_payroll_settings: fetched")
     return {
         "staff_payroll_settings": staff_settings.data or [],
         "room_piece_rates": room_rates.data or [],
@@ -188,20 +195,25 @@ def get_payroll_daily_results(
 ):
     start_date, end_date = month_range(year, month)
 
-    query = (
-        supabase.table("payroll_daily_results")
-        .select("*")
-        .gte("target_date", start_date)
-        .lte("target_date", end_date)
-        .order("target_date")
-        .order("staff_name")
-    )
+    try:
+        query = (
+            supabase.table("payroll_daily_results")
+            .select("*")
+            .gte("target_date", start_date)
+            .lte("target_date", end_date)
+            .order("target_date")
+            .order("staff_name")
+        )
 
-    if staff_id:
-        query = query.eq("staff_id", staff_id)
+        if staff_id:
+            query = query.eq("staff_id", staff_id)
 
-    res = query.execute()
+        res = query.execute()
+    except Exception as e:
+        logger.error(f"get_payroll_daily_results failed: year={year} month={month} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="給与計算結果の取得に失敗しました。")
 
+    logger.info(f"get_payroll_daily_results: year={year} month={month} count={len(res.data or [])}")
     return res.data or []
 
 
@@ -388,6 +400,7 @@ def calculate_monthly_payroll(
             .lte("target_date", end_date) \
             .execute()
     except Exception as e:
+        logger.error(f"calculate_monthly_payroll delete failed: year={year} month={month} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"delete old payroll results failed: {str(e)}")
 
     for staff_id, target_date in sorted(staff_date_keys, key=lambda x: (x[1], x[0])):
@@ -531,10 +544,12 @@ def calculate_monthly_payroll(
             insert_res = supabase.table("payroll_daily_results").insert(results).execute()
             inserted = insert_res.data or []
         except Exception as e:
+            logger.error(f"calculate_monthly_payroll insert failed: year={year} month={month} {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"insert payroll results failed: {str(e)}")
     else:
         inserted = []
 
+    logger.info(f"calculate_monthly_payroll: year={year} month={month} count={len(inserted)}")
     return {
         "ok": True,
         "year": year,
@@ -561,13 +576,18 @@ def update_payroll_daily_status(
     if status not in ["未確定", "確定済"]:
         raise HTTPException(status_code=400, detail="invalid status")
 
-    res = (
-        supabase.table("payroll_daily_results")
-        .update({"status": status})
-        .in_("id", result_ids)
-        .execute()
-    )
+    try:
+        res = (
+            supabase.table("payroll_daily_results")
+            .update({"status": status})
+            .in_("id", result_ids)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_payroll_daily_status failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="ステータスの更新に失敗しました。")
 
+    logger.info(f"update_payroll_daily_status: count={len(result_ids)} status={status}")
     return {
         "ok": True,
         "status": status,
@@ -602,19 +622,24 @@ def upsert_staff_payroll_setting(
         "is_active": True,
     }
 
-    if existing.data:
-        res = (
-            supabase.table("staff_payroll_settings")
-            .update(payload)
-            .eq("id", existing.data[0]["id"])
-            .execute()
-        )
-    else:
-        res = supabase.table("staff_payroll_settings").insert(payload).execute()
+    try:
+        if existing.data:
+            res = (
+                supabase.table("staff_payroll_settings")
+                .update(payload)
+                .eq("id", existing.data[0]["id"])
+                .execute()
+            )
+        else:
+            res = supabase.table("staff_payroll_settings").insert(payload).execute()
+    except Exception as e:
+        logger.error(f"upsert_staff_payroll_setting failed: staff_id={staff_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="staff payroll setting save failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="staff payroll setting save failed")
 
+    logger.info(f"upsert_staff_payroll_setting: staff_id={staff_id}")
     return res.data[0]
 
 @router.post("/payroll/rates/room/upsert")
@@ -647,19 +672,24 @@ def upsert_room_piece_rate(
         "is_active": True,
     }
 
-    if existing.data:
-        res = (
-            supabase.table("room_piece_rates")
-            .update(payload)
-            .eq("id", existing.data[0]["id"])
-            .execute()
-        )
-    else:
-        res = supabase.table("room_piece_rates").insert(payload).execute()
+    try:
+        if existing.data:
+            res = (
+                supabase.table("room_piece_rates")
+                .update(payload)
+                .eq("id", existing.data[0]["id"])
+                .execute()
+            )
+        else:
+            res = supabase.table("room_piece_rates").insert(payload).execute()
+    except Exception as e:
+        logger.error(f"upsert_room_piece_rate failed: {property_name}/{room_name} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="room rate save failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="room rate save failed")
 
+    logger.info(f"upsert_room_piece_rate: {property_name}/{room_name} rate={rate}")
     return res.data[0]
 
 @router.post("/payroll/rates/property-type/upsert")
@@ -688,17 +718,22 @@ def upsert_property_type_piece_rate(
         "is_active": True,
     }
 
-    if existing.data:
-        res = (
-            supabase.table("property_type_piece_rates")
-            .update(payload)
-            .eq("id", existing.data[0]["id"])
-            .execute()
-        )
-    else:
-        res = supabase.table("property_type_piece_rates").insert(payload).execute()
+    try:
+        if existing.data:
+            res = (
+                supabase.table("property_type_piece_rates")
+                .update(payload)
+                .eq("id", existing.data[0]["id"])
+                .execute()
+            )
+        else:
+            res = supabase.table("property_type_piece_rates").insert(payload).execute()
+    except Exception as e:
+        logger.error(f"upsert_property_type_piece_rate failed: {property_name} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="property type rate save failed")
 
     if not res.data:
         raise HTTPException(status_code=500, detail="property type rate save failed")
 
+    logger.info(f"upsert_property_type_piece_rate: {property_name} rate={rate}")
     return res.data[0]
