@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Body, HTTPException
 
 from app.db import supabase
@@ -7,12 +9,28 @@ router = APIRouter(tags=["tasks"])
 logger = get_logger(__name__)
 
 
+def _auto_progress_started_tasks():
+    """
+    「清掃開始」状態で cleaning_started_at から 1 分経過したタスクを「清掃中」へ自動遷移させる。
+    一覧取得系エンドポイントの先頭で呼ぶ。失敗しても取得処理自体は継続する。
+    """
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        supabase.table("cleaning_tasks").update({"status": "清掃中"}).eq(
+            "status", "清掃開始"
+        ).lt("cleaning_started_at", cutoff).execute()
+    except Exception as e:
+        logger.error(f"auto_progress_started_tasks failed: {e}", exc_info=True)
+
+
 # =========================================================
 # 清掃タスク
 # =========================================================
 @router.get("/tasks/today")
 def get_today_tasks():
     from datetime import date
+
+    _auto_progress_started_tasks()
 
     today = date.today().isoformat()
     try:
@@ -33,6 +51,8 @@ def get_today_tasks():
 @router.get("/tasks/future")
 def get_future_tasks():
     from datetime import date
+
+    _auto_progress_started_tasks()
 
     today = date.today().isoformat()
     try:
@@ -110,6 +130,12 @@ def update_task(
 
     if status is not None:
         payload["status"] = status
+        # 「清掃開始」になった瞬間にサーバ側で開始時刻を記録する。
+        # それ以外のステータスに遷移したら開始時刻はクリアして残骸を残さない。
+        if status == "清掃開始":
+            payload["cleaning_started_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            payload["cleaning_started_at"] = None
 
     if note is not None:
         payload["note"] = note
@@ -163,6 +189,8 @@ def update_task(
 def get_tasks_by_date(date: str):
     if not date:
         raise HTTPException(status_code=400, detail="date is required")
+
+    _auto_progress_started_tasks()
 
     try:
         res = (
