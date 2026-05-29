@@ -47,6 +47,6 @@ def get_current_user_id(current_user: dict = Depends(get_current_user)) -> str:
 
 def require_admin_or_leader(current_user: dict = Depends(get_current_user)) -> dict:
     role = current_user.get("role")
-    if role not in ["admin", "leader"]:
+    if role not in ["admin", "leader", "sub_admin"]:
         raise HTTPException(status_code=403, detail="管理画面にアクセスできません。")
     return current_user
