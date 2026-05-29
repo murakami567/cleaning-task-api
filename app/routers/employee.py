@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.db import supabase
 from app.logger import get_logger
+from app.routers.tasks import _auto_progress_started_tasks
 from app.services.auth_service import get_current_user_id
 
 router = APIRouter(prefix="/api/employee", tags=["employee"])
@@ -124,6 +125,9 @@ def get_home(user_id: str = Depends(get_current_user_id)):
 @router.get("/tasks")
 def get_tasks(user_id: str = Depends(get_current_user_id)):
     today = date.today().isoformat()
+
+    _auto_progress_started_tasks()
+
     try:
         staff_res = (
             supabase
@@ -475,6 +479,10 @@ def count_today(tasks: list[dict[str, Any]]):
 def normalize_task_status(status: str | None) -> str:
     if status in ["完了", "清掃完了", "completed"]:
         return "completed"
+    if status in ["CXL", "cancelled", "キャンセル"]:
+        return "cancelled"
+    if status in ["清掃開始", "started"]:
+        return "started"
     if status in ["対応中", "清掃中", "in_progress"]:
         return "in_progress"
     return "pending"
