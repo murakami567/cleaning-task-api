@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.db import supabase
 from app.logger import get_logger
 from app.routers.tasks import _auto_progress_started_tasks
-from app.services.auth_service import get_current_user_id
+from app.services.auth_service import get_current_user_id, require_admin_or_leader
 
 router = APIRouter(prefix="/api/employee", tags=["employee"])
 logger = get_logger(__name__)
@@ -19,7 +19,7 @@ def get_me(user_id: str = Depends(get_current_user_id)):
         res = (
             supabase
             .table("staff_members")
-            .select("id, staff_name, staff_code, role")
+            .select("id, staff_name, staff_code, role, on_break, break_started_at")
             .eq("id", user_id)
             .limit(1)
             .execute()
@@ -39,7 +39,64 @@ def get_me(user_id: str = Depends(get_current_user_id)):
             "name": row.get("staff_name"),
             "login_id": row.get("staff_code"),
             "role": row.get("role"),
+            "on_break": bool(row.get("on_break")),
+            "break_started_at": row.get("break_started_at"),
         }
+    }
+
+
+@router.post("/break/toggle")
+def toggle_break(current_user: dict = Depends(require_admin_or_leader)):
+    """
+    leader / sub_admin / admin のみが自分の休憩状態をトグルできる。
+    on_break=False -> True に切替時に break_started_at を now() で記録、
+    True -> False に戻すときは NULL クリアする。
+    """
+    user_id = current_user["user_id"]
+
+    try:
+        cur_res = (
+            supabase
+            .table("staff_members")
+            .select("on_break, break_started_at")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"toggle_break read failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="休憩状態の取得に失敗しました。")
+
+    if not cur_res.data:
+        raise HTTPException(status_code=404, detail="ユーザーが見つかりません。")
+
+    is_on_break = bool(cur_res.data[0].get("on_break"))
+
+    if is_on_break:
+        patch = {"on_break": False, "break_started_at": None}
+    else:
+        patch = {
+            "on_break": True,
+            "break_started_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    try:
+        upd_res = (
+            supabase
+            .table("staff_members")
+            .update(patch)
+            .eq("id", user_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"toggle_break update failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="休憩状態の更新に失敗しました。")
+
+    logger.info(f"toggle_break: user_id={user_id} on_break={patch['on_break']}")
+    row = (upd_res.data or [{}])[0]
+    return {
+        "on_break": bool(row.get("on_break", patch["on_break"])),
+        "break_started_at": row.get("break_started_at", patch["break_started_at"]),
     }
 
 
