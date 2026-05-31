@@ -476,6 +476,10 @@ def create_room(
     capacity: int = Body(1),
     room_sort_order: int = Body(999),
     is_active: bool = Body(True),
+    prep_d: int = Body(0),
+    prep_s: int = Body(0),
+    prep_spare_s: int = Body(0),
+    prep_ta: int = Body(0),
 ):
     payload = {
         "property_id": property_id,
@@ -486,6 +490,10 @@ def create_room(
         "capacity": capacity,
         "room_sort_order": room_sort_order,
         "is_active": is_active,
+        "prep_d": prep_d,
+        "prep_s": prep_s,
+        "prep_spare_s": prep_spare_s,
+        "prep_ta": prep_ta,
     }
 
     try:
@@ -516,6 +524,10 @@ def update_room(
     capacity: int | None = Body(None),
     room_sort_order: int | None = Body(None),
     is_active: bool | None = Body(None),
+    prep_d: int | None = Body(None),
+    prep_s: int | None = Body(None),
+    prep_spare_s: int | None = Body(None),
+    prep_ta: int | None = Body(None),
 ):
     payload = {}
 
@@ -535,6 +547,14 @@ def update_room(
         payload["room_sort_order"] = room_sort_order
     if is_active is not None:
         payload["is_active"] = is_active
+    if prep_d is not None:
+        payload["prep_d"] = prep_d
+    if prep_s is not None:
+        payload["prep_s"] = prep_s
+    if prep_spare_s is not None:
+        payload["prep_spare_s"] = prep_spare_s
+    if prep_ta is not None:
+        payload["prep_ta"] = prep_ta
 
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
