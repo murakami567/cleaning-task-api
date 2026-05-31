@@ -6,6 +6,24 @@ from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_or_leader
 
+
+def _calc_towel_count(property_name: str, next_guest_count, next_stay_nights):
+    """employee.calc_towel_display と同じロジックを管理画面側でも使う。"""
+    if property_name in ["FFFホテル", "やなぎ橋"]:
+        return ""
+    try:
+        guests = int(next_guest_count or 0)
+        nights = int(next_stay_nights or 0)
+    except Exception:
+        return "-"
+    if guests <= 0 or nights <= 0:
+        return "-"
+    if nights >= 8:
+        return guests * 3
+    if nights >= 3:
+        return guests * 2
+    return guests
+
 router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal"])
 logger = get_logger(__name__)
 
@@ -355,3 +373,65 @@ def get_today_worklogs(
 
     logger.info(f"get_today_worklogs: date={target_date} count={len(result)}")
     return {"date": target_date, "worklogs": result}
+
+
+@router.get("/prep-list")
+def get_prep_list(current_user: dict = Depends(require_admin_or_leader)):
+    """
+    翌日以降の清掃タスクを部屋マスタの準備物 (D / S / 予備S / タ) と結合して返す。
+    タオル数は cleaning_tasks の next_guest_count / next_stay_nights から算出。
+    備考は cleaning_tasks.note。
+    """
+    today = date.today().isoformat()
+
+    try:
+        tasks_res = (
+            supabase.table("cleaning_tasks")
+            .select("*")
+            .gt("task_date", today)
+            .order("task_date")
+            .order("property_name")
+            .order("room_name")
+            .execute()
+        )
+
+        rooms_res = (
+            supabase.table("rooms")
+            .select("room_key, prep_d, prep_s, prep_spare_s, prep_ta")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_prep_list failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="準備物一覧の取得に失敗しました。")
+
+    room_lookup = {}
+    for row in rooms_res.data or []:
+        key = row.get("room_key")
+        if key:
+            room_lookup[key] = row
+
+    items = []
+    for t in tasks_res.data or []:
+        room_key = t.get("room_key")
+        room = room_lookup.get(room_key, {})
+
+        items.append({
+            "task_id": t.get("id"),
+            "task_date": t.get("task_date") or "",
+            "property_name": t.get("property_name") or "",
+            "room_name": t.get("room_name") or "",
+            "room_key": room_key or "",
+            "towel_count": _calc_towel_count(
+                t.get("property_name") or "",
+                t.get("next_guest_count"),
+                t.get("next_stay_nights"),
+            ),
+            "prep_d": int(room.get("prep_d") or 0),
+            "prep_s": int(room.get("prep_s") or 0),
+            "prep_spare_s": int(room.get("prep_spare_s") or 0),
+            "prep_ta": int(room.get("prep_ta") or 0),
+            "note": t.get("note") or "",
+        })
+
+    logger.info(f"get_prep_list: count={len(items)}")
+    return {"items": items}
