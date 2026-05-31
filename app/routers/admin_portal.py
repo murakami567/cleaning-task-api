@@ -44,6 +44,16 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
             .eq("shift_date", today)
             .execute()
         )
+
+        on_break_res = (
+            supabase
+            .table("staff_members")
+            .select("id, staff_name, staff_code, role, break_started_at")
+            .eq("on_break", True)
+            .eq("is_active", True)
+            .order("break_started_at")
+            .execute()
+        )
     except Exception as e:
         logger.error(f"get_admin_home failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="ホーム情報の取得に失敗しました。")
@@ -53,6 +63,16 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
         "todayDate": today,
         "todayMessages": message_res.data or [],
         "todayShift": shift_res.data[0] if shift_res.data else None,
+        "onBreakStaff": [
+            {
+                "id": row.get("id"),
+                "name": row.get("staff_name"),
+                "staff_code": row.get("staff_code"),
+                "role": row.get("role"),
+                "break_started_at": row.get("break_started_at"),
+            }
+            for row in (on_break_res.data or [])
+        ],
     }
 
 
