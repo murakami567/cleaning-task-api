@@ -796,11 +796,15 @@ def get_shift_board(year: int, month: int):
             .execute()
         )
 
+        # Supabase クライアントのデフォルト 1000 行制限に引っかかると
+        # 後ろの日付分が抜け、シフト表で 0 件表示になる。月内ほぼ全室が
+        # 入る最大件数を上限として明示する。
         task_res = (
             supabase.table("cleaning_tasks")
             .select("task_date")
             .gte("task_date", range_start.isoformat())
             .lt("task_date", range_end.isoformat())
+            .limit(50000)
             .execute()
         )
     except Exception as e:
