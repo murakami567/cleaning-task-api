@@ -441,6 +441,9 @@ def get_prep_list(current_user: dict = Depends(require_admin_or_leader)):
 def get_lost_items(current_user: dict = Depends(require_admin_or_leader)):
     """
     スタッフから報告された忘れ物の一覧。新しい順に返す。
+    既存テーブルの found_date / item_name / image_url を
+    フロント互換のキー (task_date / item_description / photo_url) に
+    マッピングして返す。
     """
     try:
         res = (
@@ -457,14 +460,16 @@ def get_lost_items(current_user: dict = Depends(require_admin_or_leader)):
     for row in res.data or []:
         items.append({
             "id": row.get("id"),
-            "task_id": row.get("task_id"),
-            "task_date": row.get("task_date") or "",
+            "task_id": None,
+            "task_date": row.get("found_date") or "",
             "property_name": row.get("property_name") or "",
             "room_name": row.get("room_name") or "",
-            "item_description": row.get("item_description") or "",
-            "photo_url": row.get("photo_url") or "",
-            "reported_by": row.get("reported_by") or "",
-            "reported_by_name": row.get("reported_by_name") or "",
+            "item_description": row.get("item_name") or "",
+            "photo_url": row.get("image_url") or "",
+            "status": row.get("status") or "",
+            "note": row.get("note") or "",
+            "reported_by": row.get("created_by_staff_code") or "",
+            "reported_by_name": row.get("created_by_staff_name") or "",
             "created_at": row.get("created_at") or "",
         })
 

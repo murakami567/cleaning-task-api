@@ -416,45 +416,49 @@ def create_lost_item(
 ):
     """
     清掃中に見つけた忘れ物の報告。写真必須（base64 data URL）。
+    既存の lost_items テーブル定義に合わせて、found_date / item_name /
+    image_url / created_by_staff_code / created_by_staff_name へマッピング。
     """
-    task_id = payload.get("task_id")
     property_name = (payload.get("property_name") or "").strip()
     room_name = (payload.get("room_name") or "").strip()
-    task_date = payload.get("task_date")
-    item_description = (payload.get("item_description") or "").strip()
-    photo_url = payload.get("photo_url") or ""
+    # フロントは task_date / item_description / photo_url で送ってくる
+    found_date = payload.get("task_date")
+    item_name = (payload.get("item_description") or "").strip()
+    image_url = payload.get("photo_url") or ""
 
-    if not property_name or not room_name or not task_date:
+    if not property_name or not room_name or not found_date:
         raise HTTPException(status_code=400, detail="部屋・日付の情報が不足しています。")
-    if not item_description:
+    if not item_name:
         raise HTTPException(status_code=400, detail="品目を入力してください。")
-    if not photo_url:
+    if not image_url:
         raise HTTPException(status_code=400, detail="写真を添付してください。")
 
-    # 報告者名を取得
-    reported_by_name = ""
+    # 報告者情報を staff_members から引く（created_by_staff_code/name は text）
+    staff_code = ""
+    staff_name = ""
     try:
         staff_res = (
             supabase.table("staff_members")
-            .select("staff_name")
+            .select("staff_code, staff_name")
             .eq("id", user_id)
             .limit(1)
             .execute()
         )
         if staff_res.data:
-            reported_by_name = staff_res.data[0].get("staff_name") or ""
+            staff_code = staff_res.data[0].get("staff_code") or ""
+            staff_name = staff_res.data[0].get("staff_name") or ""
     except Exception as e:
         logger.error(f"create_lost_item staff lookup failed: {e}", exc_info=True)
 
     insert_data = {
-        "task_id": task_id,
         "property_name": property_name,
         "room_name": room_name,
-        "task_date": task_date,
-        "item_description": item_description,
-        "photo_url": photo_url,
-        "reported_by": user_id,
-        "reported_by_name": reported_by_name,
+        "room_key": f"{property_name}{room_name}",
+        "found_date": found_date,
+        "item_name": item_name,
+        "image_url": image_url,
+        "created_by_staff_code": staff_code,
+        "created_by_staff_name": staff_name,
     }
 
     try:
@@ -468,7 +472,7 @@ def create_lost_item(
 
     logger.info(
         f"create_lost_item: user_id={user_id} room={property_name}/{room_name}"
-        f" date={task_date}"
+        f" date={found_date}"
     )
     return {"message": "忘れ物を報告しました。", "data": res.data[0]}
 
