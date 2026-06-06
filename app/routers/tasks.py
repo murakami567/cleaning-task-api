@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import get_current_user
 
 router = APIRouter(tags=["tasks"])
 logger = get_logger(__name__)
@@ -981,6 +982,137 @@ def upsert_shift_entry(
         raise HTTPException(status_code=500, detail="shift entry upsert failed")
 
     return res.data[0]
+
+# =========================================================
+# スタッフ日次スケジュール (staff_day_schedules)
+# =========================================================
+@router.get("/staff-schedules")
+def list_staff_schedules(shift_date: str):
+    """
+    指定日のスタッフ日次スケジュール一覧（全員分）。閲覧は認証不要。
+    """
+    if not shift_date:
+        raise HTTPException(status_code=400, detail="shift_date is required")
+
+    try:
+        res = (
+            supabase.table("staff_day_schedules")
+            .select("*")
+            .eq("shift_date", shift_date)
+            .order("staff_id")
+            .order("start_time")
+            .limit(10000)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"list_staff_schedules failed: date={shift_date} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュール取得に失敗しました。")
+
+    logger.info(f"list_staff_schedules: date={shift_date} count={len(res.data or [])}")
+    return res.data or []
+
+
+@router.post("/staff-schedules/upsert")
+def upsert_staff_schedule(
+    shift_date: str = Body(...),
+    staff_id: str = Body(...),
+    start_time: str = Body(...),
+    end_time: str = Body(...),
+    place: str | None = Body(""),
+    work_category: str | None = Body(""),
+    details: str | None = Body(""),
+    id: str | None = Body(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    自分のスケジュールのみ作成/更新できる。staff_id != current_user.user_id は 403。
+    """
+    if current_user["user_id"] != staff_id:
+        raise HTTPException(status_code=403, detail="他のスタッフのスケジュールは編集できません。")
+
+    if not shift_date or not start_time or not end_time:
+        raise HTTPException(status_code=400, detail="日付・時間は必須です。")
+    if end_time <= start_time:
+        raise HTTPException(status_code=400, detail="終了時間は開始時間より後にしてください。")
+
+    payload = {
+        "shift_date": shift_date,
+        "staff_id": staff_id,
+        "start_time": start_time,
+        "end_time": end_time,
+        "place": place or "",
+        "work_category": work_category or "",
+        "details": details or "",
+    }
+
+    try:
+        if id:
+            # 更新時も id の所有者チェック
+            cur = (
+                supabase.table("staff_day_schedules")
+                .select("staff_id")
+                .eq("id", id)
+                .limit(1)
+                .execute()
+            )
+            if not cur.data:
+                raise HTTPException(status_code=404, detail="スケジュールが見つかりません。")
+            if cur.data[0].get("staff_id") != current_user["user_id"]:
+                raise HTTPException(status_code=403, detail="他のスタッフのスケジュールは編集できません。")
+
+            res = (
+                supabase.table("staff_day_schedules")
+                .update(payload)
+                .eq("id", id)
+                .execute()
+            )
+        else:
+            res = supabase.table("staff_day_schedules").insert(payload).execute()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"upsert_staff_schedule failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュール保存に失敗しました。")
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="スケジュール保存に失敗しました。")
+
+    return res.data[0]
+
+
+@router.post("/staff-schedules/delete")
+def delete_staff_schedule(
+    id: str = Body(..., embed=True),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    自分のスケジュールのみ削除できる。
+    """
+    try:
+        cur = (
+            supabase.table("staff_day_schedules")
+            .select("staff_id")
+            .eq("id", id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"delete_staff_schedule lookup failed: id={id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュール削除に失敗しました。")
+
+    if not cur.data:
+        raise HTTPException(status_code=404, detail="スケジュールが見つかりません。")
+    if cur.data[0].get("staff_id") != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="他のスタッフのスケジュールは編集できません。")
+
+    try:
+        supabase.table("staff_day_schedules").delete().eq("id", id).execute()
+    except Exception as e:
+        logger.error(f"delete_staff_schedule failed: id={id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スケジュール削除に失敗しました。")
+
+    return {"ok": True}
+
 
 # =========================================================
 # 新規オープン進捗
