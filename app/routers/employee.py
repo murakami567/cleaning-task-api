@@ -409,6 +409,70 @@ def create_worklog(
     return {"message": "実働を登録しました。", "data": res.data[0]}
 
 
+@router.post("/lost-items")
+def create_lost_item(
+    payload: dict[str, Any] = Body(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    清掃中に見つけた忘れ物の報告。写真必須（base64 data URL）。
+    """
+    task_id = payload.get("task_id")
+    property_name = (payload.get("property_name") or "").strip()
+    room_name = (payload.get("room_name") or "").strip()
+    task_date = payload.get("task_date")
+    item_description = (payload.get("item_description") or "").strip()
+    photo_url = payload.get("photo_url") or ""
+
+    if not property_name or not room_name or not task_date:
+        raise HTTPException(status_code=400, detail="部屋・日付の情報が不足しています。")
+    if not item_description:
+        raise HTTPException(status_code=400, detail="品目を入力してください。")
+    if not photo_url:
+        raise HTTPException(status_code=400, detail="写真を添付してください。")
+
+    # 報告者名を取得
+    reported_by_name = ""
+    try:
+        staff_res = (
+            supabase.table("staff_members")
+            .select("staff_name")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if staff_res.data:
+            reported_by_name = staff_res.data[0].get("staff_name") or ""
+    except Exception as e:
+        logger.error(f"create_lost_item staff lookup failed: {e}", exc_info=True)
+
+    insert_data = {
+        "task_id": task_id,
+        "property_name": property_name,
+        "room_name": room_name,
+        "task_date": task_date,
+        "item_description": item_description,
+        "photo_url": photo_url,
+        "reported_by": user_id,
+        "reported_by_name": reported_by_name,
+    }
+
+    try:
+        res = supabase.table("lost_items").insert(insert_data).execute()
+    except Exception as e:
+        logger.error(f"create_lost_item failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="忘れ物報告の保存に失敗しました。")
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="忘れ物報告の保存に失敗しました。")
+
+    logger.info(
+        f"create_lost_item: user_id={user_id} room={property_name}/{room_name}"
+        f" date={task_date}"
+    )
+    return {"message": "忘れ物を報告しました。", "data": res.data[0]}
+
+
 @router.put("/settings/password")
 def update_password(
     payload: dict[str, Any] = Body(...),
