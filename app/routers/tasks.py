@@ -796,23 +796,34 @@ def get_shift_board(year: int, month: int):
             .execute()
         )
 
-        # Supabase クライアントのデフォルト 1000 行制限に引っかかると
-        # 後ろの日付分が抜け、シフト表で 0 件表示になる。月内ほぼ全室が
-        # 入る最大件数を上限として明示する。
-        task_res = (
-            supabase.table("cleaning_tasks")
-            .select("task_date")
-            .gte("task_date", range_start.isoformat())
-            .lt("task_date", range_end.isoformat())
-            .limit(50000)
-            .execute()
-        )
+        # PostgREST がサーバ側で max-rows=1000 を強制するため、
+        # .limit() を上げても 1000 で打ち切られ後ろの日付分が抜ける。
+        # range() で 1000 件ずつページングして全件取得する。
+        task_rows = []
+        page_size = 1000
+        offset = 0
+        while True:
+            batch = (
+                supabase.table("cleaning_tasks")
+                .select("task_date")
+                .gte("task_date", range_start.isoformat())
+                .lt("task_date", range_end.isoformat())
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = batch.data or []
+            task_rows.extend(rows)
+            if len(rows) < page_size:
+                break
+            offset += page_size
+            if offset > 50000:  # 暴走防止
+                break
     except Exception as e:
         logger.error(f"get_shift_board failed: year={year} month={month} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="シフトボードの取得に失敗しました。")
 
     cleaning_counts = defaultdict(int)
-    for row in task_res.data or []:
+    for row in task_rows:
         task_date = row.get("task_date")
         if task_date:
             cleaning_counts[task_date] += 1
