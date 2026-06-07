@@ -8,6 +8,7 @@ from app.routers.beds24 import router as beds24_router
 from app.routers.auth import router as auth_router
 from app.routers.employee import router as employee_router
 from app.routers.admin_portal import router as admin_portal_router
+from app.routers.jinjer import router as jinjer_router
 from app.routers import payroll
 
 logger = get_logger(__name__)
@@ -50,6 +51,7 @@ app.include_router(beds24_router)
 app.include_router(auth_router)
 app.include_router(employee_router)
 app.include_router(admin_portal_router)
+app.include_router(jinjer_router)
 app.include_router(payroll.router)
 
 logger.info("cleaning-task-api started")
