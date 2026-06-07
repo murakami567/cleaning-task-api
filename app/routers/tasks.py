@@ -724,6 +724,8 @@ def upsert_staff(
     is_active: bool = Body(True),
     note: str = Body(""),
     password: str | None = Body(None),
+    area: str | None = Body(None),
+    available_property_ids: list[str] | None = Body(None),
 ):
 
     payload = {
@@ -737,6 +739,12 @@ def upsert_staff(
 
     if password is not None:
         payload["password"] = password
+
+    # 対応エリア・対応可能物件は指定があれば反映 (None なら触らない)
+    if area is not None:
+        payload["area"] = area
+    if available_property_ids is not None:
+        payload["available_property_ids"] = available_property_ids
 
     # 更新
     try:
