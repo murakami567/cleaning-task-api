@@ -726,6 +726,7 @@ def upsert_staff(
     password: str | None = Body(None),
     area: str | None = Body(None),
     available_property_ids: list[str] | None = Body(None),
+    lineworks_channel_id: str | None = Body(None),
 ):
 
     payload = {
@@ -745,6 +746,8 @@ def upsert_staff(
         payload["area"] = area
     if available_property_ids is not None:
         payload["available_property_ids"] = available_property_ids
+    if lineworks_channel_id is not None:
+        payload["lineworks_channel_id"] = lineworks_channel_id
 
     # 更新
     try:
