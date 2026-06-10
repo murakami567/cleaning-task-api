@@ -6,10 +6,41 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_or_leader
-from app.services.lineworks_service import send_text_to_channel
+from app.services.lineworks_service import (
+    PRIVATE_KEY,
+    BOT_ID,
+    CLIENT_ID,
+    SERVICE_ACCOUNT,
+    send_text_to_channel,
+)
 
 router = APIRouter(prefix="/lineworks", tags=["lineworks"])
 logger = get_logger(__name__)
+
+
+@router.get("/debug-config")
+def debug_config(current_user: dict = Depends(require_admin_or_leader)):
+    """
+    LINE WORKS 環境変数の設定状態を確認するための診断 (鍵そのものは漏らさない)。
+    """
+    key = PRIVATE_KEY or ""
+    return {
+        "bot_id_set": bool(BOT_ID),
+        "client_id_set": bool(CLIENT_ID),
+        "service_account_set": bool(SERVICE_ACCOUNT),
+        "private_key_length": len(key),
+        "private_key_newline_count": key.count("\n"),
+        "private_key_has_begin": "-----BEGIN" in key,
+        "private_key_has_end": "-----END" in key,
+        "private_key_begin_marker": (
+            key.split("\n")[0] if key else ""
+        ),
+        "private_key_end_marker": (
+            [line for line in key.split("\n") if line.startswith("-----END")][0]
+            if "-----END" in key
+            else ""
+        ),
+    }
 
 
 @router.get("/next-day-targets")

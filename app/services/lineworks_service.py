@@ -14,8 +14,51 @@ BOT_ID = os.getenv("LINEWORKS_BOT_ID", "")
 CLIENT_ID = os.getenv("LINEWORKS_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("LINEWORKS_CLIENT_SECRET", "")
 SERVICE_ACCOUNT = os.getenv("LINEWORKS_SERVICE_ACCOUNT", "")
-# Render の環境変数で改行を \n エスケープして格納される想定。
-PRIVATE_KEY = os.getenv("LINEWORKS_PRIVATE_KEY", "").replace("\\n", "\n")
+
+
+def _normalize_pem(raw: str) -> str:
+    """
+    Render の環境変数に入れた PEM を正規化する。
+    想定パターン:
+      A. 実改行込みでそのまま入っている  → そのまま
+      B. \\n でエスケープされた 1 行     → 改行に戻す
+      C. CRLF                              → LF に統一
+      D. 前後にダブルクォートが付いている → 剥がす
+      E. 改行なしの 1 行 PEM (BEGIN/END マーカーだけ正しい) → 64 文字ごとに改行を入れて復元
+    """
+    if not raw:
+        return ""
+
+    s = raw.strip()
+    # 前後のクォート剥がし
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1]
+
+    # エスケープ済み改行 → 実改行
+    s = s.replace("\\r\\n", "\n").replace("\\n", "\n")
+    # CRLF → LF
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+
+    if "BEGIN" not in s:
+        return s  # PEM じゃない値の可能性。そのまま返してエラーに任せる。
+
+    # 改行なしの 1 行 PEM の救済: BEGIN/END マーカーの間を 64 文字ずつに分割
+    if "\n" not in s.strip():
+        import re
+        m = re.match(r"(-----BEGIN [^-]+-----)(.+?)(-----END [^-]+-----)$", s)
+        if m:
+            header, body, footer = m.group(1), m.group(2).strip(), m.group(3)
+            chunks = [body[i:i + 64] for i in range(0, len(body), 64)]
+            s = header + "\n" + "\n".join(chunks) + "\n" + footer + "\n"
+
+    # 末尾改行を 1 つに揃える
+    if not s.endswith("\n"):
+        s += "\n"
+
+    return s
+
+
+PRIVATE_KEY = _normalize_pem(os.getenv("LINEWORKS_PRIVATE_KEY", ""))
 
 AUTH_URL = "https://auth.worksmobile.com/oauth2/v2.0/token"
 API_BASE = "https://www.worksapis.com/v1.0"
