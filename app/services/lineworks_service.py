@@ -65,6 +65,24 @@ def _get_access_token() -> str:
 
     try:
         jwt_token = _build_jwt()
+    except Exception as e:
+        # 一番ハマるのが秘密鍵の PEM 改行が崩れているケース。エラーメッセージに
+        # 入っているとデバッグが早い。
+        logger.error(
+            f"lineworks JWT build failed: {e} "
+            f"(private_key_starts_with={(PRIVATE_KEY or '')[:30]!r})",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "LINE WORKS の秘密鍵が読み込めません。"
+                "Render の LINEWORKS_PRIVATE_KEY が PEM 形式 (改行込み) で"
+                "設定されているか確認してください。"
+            ),
+        )
+
+    try:
         res = requests.post(
             AUTH_URL,
             data={
