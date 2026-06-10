@@ -4,4 +4,4 @@ python-dotenv
 supabase
 requests
 pandas
-PyJWT
+PyJWT[crypto]
