@@ -24,6 +24,7 @@ def _calc_towel_count(property_name: str, next_guest_count, next_stay_nights):
         return guests * 2
     return guests
 
+
 router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal"])
 logger = get_logger(__name__)
 
@@ -40,6 +41,83 @@ class PortalScheduleBody(BaseModel):
     assignee_names: list[str] = []
     title: str
     description: str = ""
+
+
+def _get_today_attendance_map(today: str) -> dict[str, dict]:
+    """
+    Jinjer同期後の打刻情報を staff_id ごとに返す。
+    attendance_logs テーブルが未作成・未同期でもホーム画面は壊さない。
+    想定カラム:
+      - work_date/date/target_date のいずれか
+      - staff_id
+      - staff_name
+      - clock_in_at
+      - clock_out_at
+      - source
+    """
+    date_columns = ["work_date", "date", "target_date"]
+
+    for date_column in date_columns:
+        try:
+            res = (
+                supabase
+                .table("attendance_logs")
+                .select("*")
+                .eq(date_column, today)
+                .execute()
+            )
+        except Exception as e:
+            logger.warning(
+                f"attendance_logs lookup skipped: column={date_column} error={e}"
+            )
+            continue
+
+        attendance_map: dict[str, dict] = {}
+        for row in res.data or []:
+            staff_id = row.get("staff_id") or row.get("user_id")
+            if not staff_id:
+                continue
+            attendance_map[staff_id] = row
+
+        return attendance_map
+
+    return {}
+
+
+def _enrich_shift_with_attendance(today_shift: dict | None, attendance_map: dict[str, dict]) -> dict | None:
+    if not today_shift:
+        return today_shift
+
+    entries = today_shift.get("shift_entries") or []
+    enriched_entries = []
+
+    for entry in entries:
+        staff = entry.get("staff_members") or {}
+        staff_id = entry.get("staff_id") or staff.get("id") or entry.get("user_id")
+        attendance = attendance_map.get(staff_id or "", {})
+
+        clock_in_at = attendance.get("clock_in_at") or attendance.get("started_at")
+        clock_out_at = attendance.get("clock_out_at") or attendance.get("ended_at")
+        attendance_status = "clocked_in" if clock_in_at else "not_clocked_in"
+
+        enriched = {
+            **entry,
+            "clock_in_at": clock_in_at,
+            "clock_out_at": clock_out_at,
+            "attendance_status": attendance_status,
+            "attendance": {
+                "status": attendance_status,
+                "clock_in_at": clock_in_at,
+                "clock_out_at": clock_out_at,
+                "source": attendance.get("source") or "jinjer",
+            },
+        }
+        enriched_entries.append(enriched)
+
+    return {
+        **today_shift,
+        "shift_entries": enriched_entries,
+    }
 
 
 @router.get("/home")
@@ -76,11 +154,17 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
         logger.error(f"get_admin_home failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="ホーム情報の取得に失敗しました。")
 
-    logger.info(f"get_admin_home: today={today}")
+    today_shift = shift_res.data[0] if shift_res.data else None
+    attendance_map = _get_today_attendance_map(today)
+    today_shift = _enrich_shift_with_attendance(today_shift, attendance_map)
+
+    logger.info(
+        f"get_admin_home: today={today} attendance_count={len(attendance_map)}"
+    )
     return {
         "todayDate": today,
         "todayMessages": message_res.data or [],
-        "todayShift": shift_res.data[0] if shift_res.data else None,
+        "todayShift": today_shift,
         "onBreakStaff": [
             {
                 "id": row.get("id"),
