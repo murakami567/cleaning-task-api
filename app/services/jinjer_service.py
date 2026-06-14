@@ -13,9 +13,10 @@ JINJER_BASE_URL = os.getenv("JINJER_BASE_URL", "https://api.jinjer.biz").rstrip(
 JINJER_API_KEY = os.getenv("JINJER_API_KEY", "")
 JINJER_SECRET_KEY = os.getenv("JINJER_SECRET_KEY", "")
 
+# 勤怠 日次打刻データ
 JINJER_ATTENDANCE_ENDPOINT = os.getenv(
     "JINJER_ATTENDANCE_ENDPOINT",
-    "/v2/employees/attendances",
+    "/v1/kintai-daily-attendances",
 )
 
 # トークンは 4 時間有効。安全側で 3.5 時間でキャッシュ切れにする。
@@ -148,9 +149,6 @@ def _pick_first(row: dict[str, Any], keys: list[str]) -> Any:
 
 
 def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
-    """
-    Jinjer打刻APIのレスポンス差分を吸収して、保存用の共通形へ寄せる。
-    """
     employee_id = str(
         _pick_first(row, ["employee_id", "employee-id", "staff_id", "employee_code", "code"]) or ""
     ).strip()
@@ -160,6 +158,7 @@ def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
     clock_in_at = _pick_first(
         row,
         [
+            "attended_at",
             "clock_in_at",
             "clock_in",
             "check_in_at",
@@ -174,6 +173,7 @@ def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
     clock_out_at = _pick_first(
         row,
         [
+            "left_at",
             "clock_out_at",
             "clock_out",
             "check_out_at",
@@ -191,12 +191,12 @@ def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
         if not clock_in_at:
             clock_in_at = _pick_first(
                 attendance,
-                ["clock_in_at", "clock_in", "start_at", "start_time", "begin_at", "begin_time"],
+                ["attended_at", "clock_in_at", "clock_in", "start_at", "start_time", "begin_at", "begin_time"],
             )
         if not clock_out_at:
             clock_out_at = _pick_first(
                 attendance,
-                ["clock_out_at", "clock_out", "end_at", "end_time", "finish_at", "finish_time"],
+                ["left_at", "clock_out_at", "clock_out", "end_at", "end_time", "finish_at", "finish_time"],
             )
         if not work_date:
             work_date = _pick_first(attendance, ["date", "work_date", "target_date"])
@@ -213,40 +213,37 @@ def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _month_from_date(date_str: str) -> str:
-    return str(date_str)[:7]
-
-
 def fetch_attendances(start_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
     """
-    Jinjerから打刻データを取得する。
+    Jinjer 勤怠 日次打刻データを取得する。
 
-    /v2/employees/attendances は month=YYYY-MM が必須。
-    API側では日付範囲に必要な月を取得し、取得後に日付で絞り込む。
+    /v1/kintai-daily-attendances は date=YYYY-MM-DD が必須。
+    employee_id 配下の attendances[] をフラット化して返す。
     """
     target_end_date = end_date or start_date
-    months: list[str] = []
-    start_month = _month_from_date(start_date)
-    end_month = _month_from_date(target_end_date)
-    months.append(start_month)
-    if end_month != start_month:
-        months.append(end_month)
-
     items: list[dict[str, Any]] = []
     safety_max_pages = 200
 
-    for month in months:
+    # 通常は単日同期。期間指定時は日付ごとに取得する。
+    from datetime import date as date_cls, timedelta
+
+    start_d = date_cls.fromisoformat(start_date)
+    end_d = date_cls.fromisoformat(target_end_date)
+    current = start_d
+
+    while current <= end_d:
+        target = current.isoformat()
         page = 1
         while page <= safety_max_pages:
             params = {
-                "month": month,
+                "date": target,
                 "page": page,
             }
 
             try:
                 res = _authorized_get(JINJER_ATTENDANCE_ENDPOINT, params=params, timeout=60)
             except Exception as e:
-                logger.error(f"jinjer attendances request failed: month={month} page={page} {e}", exc_info=True)
+                logger.error(f"jinjer attendances request failed: date={target} page={page} {e}", exc_info=True)
                 raise HTTPException(status_code=502, detail="Jinjer 打刻取得に失敗しました。")
 
             if res.status_code != 200:
@@ -282,11 +279,14 @@ def fetch_attendances(start_date: str, end_date: str | None = None) -> list[dict
                 if start_date <= work_date <= target_end_date:
                     items.append(normalized)
 
-            if len(page_data) < 20:
+            # Jinjer docs: page未指定で100件。100件未満で終了。
+            if len(page_data) < 100:
                 break
             page += 1
 
+        current += timedelta(days=1)
+
     logger.info(
-        f"jinjer attendances fetched: start={start_date} end={target_end_date} endpoint={JINJER_ATTENDANCE_ENDPOINT} months={months} items={len(items)}"
+        f"jinjer attendances fetched: start={start_date} end={target_end_date} endpoint={JINJER_ATTENDANCE_ENDPOINT} items={len(items)}"
     )
     return items
