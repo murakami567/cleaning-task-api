@@ -1,4 +1,5 @@
 import re
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -6,13 +7,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_or_leader
-from app.services.jinjer_service import fetch_work_schedules
+from app.services.jinjer_service import fetch_attendances, fetch_work_schedules
 
 router = APIRouter(prefix="/jinjer", tags=["jinjer"])
 logger = get_logger(__name__)
 
 
 MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _normalize_time(t: str | None) -> str | None:
@@ -23,6 +25,44 @@ def _normalize_time(t: str | None) -> str | None:
     if not s:
         return None
     return s[:5]
+
+
+def _normalize_datetime(value: Any, work_date: str) -> str | None:
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if "T" in s or "+" in s or s.endswith("Z"):
+        return s
+    if re.match(r"^\d{1,2}:\d{2}", s):
+        return f"{work_date}T{s[:5]}:00+09:00"
+    return s
+
+
+def _get_staff_maps() -> tuple[dict[str, dict], dict[str, dict]]:
+    try:
+        staff_res = (
+            supabase.table("staff_members")
+            .select("id, staff_name, staff_code")
+            .eq("is_active", True)
+            .limit(10000)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"jinjer staff lookup failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スタッフ取得に失敗しました。")
+
+    code_to_staff: dict[str, dict] = {}
+    id_to_staff: dict[str, dict] = {}
+    for row in staff_res.data or []:
+        staff_id = row.get("id")
+        code = row.get("staff_code")
+        if staff_id:
+            id_to_staff[str(staff_id)] = row
+        if code:
+            code_to_staff[str(code).strip()] = row
+    return code_to_staff, id_to_staff
 
 
 @router.post("/shifts/sync")
@@ -46,7 +86,6 @@ def sync_jinjer_shifts(
     if not MONTH_PATTERN.match(month or ""):
         raise HTTPException(status_code=400, detail="month は YYYY-MM 形式で指定してください。")
 
-    # 1. Jinjer からシフト一覧を取得
     items = fetch_work_schedules(month)
 
     if not items:
@@ -59,26 +98,9 @@ def sync_jinjer_shifts(
             "errors": [],
         }
 
-    # 2. staff_code → staff_id のマップを作成
-    try:
-        staff_res = (
-            supabase.table("staff_members")
-            .select("id, staff_code")
-            .eq("is_active", True)
-            .limit(10000)
-            .execute()
-        )
-    except Exception as e:
-        logger.error(f"sync_jinjer_shifts staff lookup failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="スタッフ取得に失敗しました。")
+    code_to_staff, _ = _get_staff_maps()
+    code_to_id = {code: staff.get("id") for code, staff in code_to_staff.items() if staff.get("id")}
 
-    code_to_id: dict[str, str] = {}
-    for row in staff_res.data or []:
-        code = row.get("staff_code")
-        if code:
-            code_to_id[str(code).strip()] = row.get("id")
-
-    # 3. 取得期間内に必要となる日付の shift_days を一気に取得 / 作成
     needed_dates: set[str] = set()
     for it in items:
         if it["employee_id"] in code_to_id and it.get("date"):
@@ -99,7 +121,6 @@ def sync_jinjer_shifts(
     for row in (day_res.data if day_res else []) or []:
         date_to_day_id[row["shift_date"]] = row["id"]
 
-    # 不足分は作成
     for d in sorted(needed_dates):
         if d in date_to_day_id:
             continue
@@ -114,7 +135,6 @@ def sync_jinjer_shifts(
         except Exception as e:
             logger.error(f"sync_jinjer_shifts shift_day create failed: date={d} {e}", exc_info=True)
 
-    # 4. 既存の shift_entries を (date, staff_id) でマップ化（assigned_area / note 保持用）
     try:
         ent_res = (
             supabase.table("shift_entries")
@@ -132,7 +152,6 @@ def sync_jinjer_shifts(
         key = (row["shift_day_id"], row["staff_id"])
         existing[key] = row
 
-    # 5. アイテムごとに upsert
     saved = 0
     skipped_no_staff: list[str] = []
     errors: list[dict[str, Any]] = []
@@ -154,14 +173,9 @@ def sync_jinjer_shifts(
         start_time = _normalize_time(it.get("start"))
         end_time = _normalize_time(it.get("end"))
 
-        # Jinjer は予定としてレコードを返してくるので、予定 = 出勤扱い
-        # 既存のステータスが 欠勤/遅刻 等で手動変更されていた場合は上書きしない。
         prev = existing.get((shift_day_id, staff_id)) or {}
         prev_status = prev.get("status")
-        if prev_status in ("欠勤", "遅刻"):
-            new_status = prev_status  # 手動の欠勤/遅刻を保持
-        else:
-            new_status = "出勤"
+        new_status = prev_status if prev_status in ("欠勤", "遅刻") else "出勤"
 
         payload = {
             "shift_day_id": shift_day_id,
@@ -169,7 +183,6 @@ def sync_jinjer_shifts(
             "status": new_status,
             "start_time": start_time,
             "end_time": end_time,
-            # assigned_area / note は既存値を維持
             "assigned_area": prev.get("assigned_area") or "",
             "note": prev.get("note") or "",
         }
@@ -181,20 +194,13 @@ def sync_jinjer_shifts(
                 supabase.table("shift_entries").insert(payload).execute()
             saved += 1
         except Exception as e:
-            errors.append({
-                "employee_id": employee_id,
-                "date": it["date"],
-                "error": str(e)[:200],
-            })
+            errors.append({"employee_id": employee_id, "date": it["date"], "error": str(e)[:200]})
             if len(errors) > 50:
-                # ログにも残してレスポンスサイズが膨れすぎないように
-                logger.error(f"sync_jinjer_shifts too many errors")
+                logger.error("sync_jinjer_shifts too many errors")
                 break
 
     logger.info(
-        f"sync_jinjer_shifts: month={month} fetched={len(items)}"
-        f" matched_staff={len(code_to_id)} saved={saved}"
-        f" skipped_no_staff={len(skipped_no_staff)} errors={len(errors)}"
+        f"sync_jinjer_shifts: month={month} fetched={len(items)} matched_staff={len(code_to_id)} saved={saved} skipped_no_staff={len(skipped_no_staff)} errors={len(errors)}"
     )
 
     return {
@@ -205,3 +211,103 @@ def sync_jinjer_shifts(
         "skipped_no_staff": skipped_no_staff[:50],
         "errors": errors[:50],
     }
+
+
+@router.post("/attendances/sync")
+def sync_jinjer_attendances(
+    target_date: str | None = Body(None, embed=True),
+    start_date: str | None = Body(None, embed=True),
+    end_date: str | None = Body(None, embed=True),
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    """
+    Jinjerから打刻データを取得して attendance_logs に保存する。
+
+    基本利用:
+      POST /jinjer/attendances/sync {"target_date":"2026-06-14"}
+
+    期間指定:
+      POST /jinjer/attendances/sync {"start_date":"2026-06-01", "end_date":"2026-06-14"}
+    """
+    if target_date:
+        start = target_date
+        end = target_date
+    else:
+        start = start_date or date.today().isoformat()
+        end = end_date or start
+
+    if not DATE_PATTERN.match(start or ""):
+        raise HTTPException(status_code=400, detail="start_date/target_date は YYYY-MM-DD 形式で指定してください。")
+    if not DATE_PATTERN.match(end or ""):
+        raise HTTPException(status_code=400, detail="end_date は YYYY-MM-DD 形式で指定してください。")
+    if end < start:
+        raise HTTPException(status_code=400, detail="end_date は start_date 以降にしてください。")
+
+    items = fetch_attendances(start, end)
+    code_to_staff, _ = _get_staff_maps()
+
+    saved = 0
+    skipped_no_staff: list[str] = []
+    errors: list[dict[str, Any]] = []
+    seen_no_staff: set[str] = set()
+
+    for it in items:
+        employee_id = it.get("employee_id")
+        staff = code_to_staff.get(str(employee_id or "").strip())
+        if not staff:
+            if employee_id and employee_id not in seen_no_staff:
+                seen_no_staff.add(employee_id)
+                skipped_no_staff.append(employee_id)
+            continue
+
+        work_date = it["work_date"]
+        payload = {
+            "work_date": work_date,
+            "staff_id": staff.get("id"),
+            "staff_name": staff.get("staff_name") or "",
+            "staff_code": staff.get("staff_code") or employee_id,
+            "clock_in_at": _normalize_datetime(it.get("clock_in_at"), work_date),
+            "clock_out_at": _normalize_datetime(it.get("clock_out_at"), work_date),
+            "source": "jinjer",
+            "raw_data": it.get("raw_data") or it,
+        }
+
+        try:
+            existing = (
+                supabase.table("attendance_logs")
+                .select("id")
+                .eq("work_date", work_date)
+                .eq("staff_id", staff.get("id"))
+                .eq("source", "jinjer")
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                supabase.table("attendance_logs").update(payload).eq("id", existing.data[0]["id"]).execute()
+            else:
+                supabase.table("attendance_logs").insert(payload).execute()
+            saved += 1
+        except Exception as e:
+            errors.append({"employee_id": employee_id, "date": work_date, "error": str(e)[:200]})
+            if len(errors) > 50:
+                logger.error("sync_jinjer_attendances too many errors")
+                break
+
+    logger.info(
+        f"sync_jinjer_attendances: start={start} end={end} fetched={len(items)} saved={saved} skipped_no_staff={len(skipped_no_staff)} errors={len(errors)}"
+    )
+
+    return {
+        "start_date": start,
+        "end_date": end,
+        "fetched": len(items),
+        "saved": saved,
+        "skipped_no_staff": skipped_no_staff[:50],
+        "errors": errors[:50],
+    }
+
+
+@router.post("/attendances/sync-today")
+def sync_jinjer_attendances_today(current_user: dict = Depends(require_admin_or_leader)):
+    today = date.today().isoformat()
+    return sync_jinjer_attendances(target_date=today, current_user=current_user)
