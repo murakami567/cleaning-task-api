@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -21,6 +22,8 @@ def update_task_with_times(
     assigned_staff_name: str | None = Body(None),
     checker_id: str | None = Body(None),
     checker_name: str | None = Body(None),
+    checklist: dict[str, Any] | None = Body(None),
+    checked_by_name: str | None = Body(None),
 ):
     """
     清掃タスク更新。
@@ -28,11 +31,9 @@ def update_task_with_times(
     時刻ルール:
     - 清掃開始: cleaning_started_at を記録
     - 清掃中: cleaning_started_at は消さない
-    - 清掃完了: cleaning_completed_at を記録
+    - 清掃完了/完了: cleaning_completed_at を記録
     - チェック完了: checked_at を記録
-
-    以前の実装では、清掃開始以外のステータス変更時に cleaning_started_at を None にしていたため、
-    メイトカルテで清掃開始〜清掃完了の時間を取得できなかった。
+    - checklist が送られてきた場合は cleaning_tasks.checklist に保存
     """
     payload = {}
     now = datetime.now(timezone.utc).isoformat()
@@ -50,14 +51,20 @@ def update_task_with_times(
         elif status == "清掃中":
             # 開始時刻は保持する
             pass
-        elif status == "清掃完了":
+        elif status in ["清掃完了", "完了"]:
             payload["cleaning_completed_at"] = now
-        elif status in ["チェック完了", "完了"]:
+        elif status == "チェック完了":
             payload["checked_at"] = now
-        elif status in ["未着手", "キャンセル", "清掃不要"]:
+            if checked_by_name is not None:
+                payload["checked_by_name"] = checked_by_name
+        elif status in ["未着手", "キャンセル", "清掃不要", "CXL"]:
             payload["cleaning_started_at"] = None
             payload["cleaning_completed_at"] = None
             payload["checked_at"] = None
+            payload["checked_by_name"] = None
+
+    if checklist is not None:
+        payload["checklist"] = checklist
 
     if note is not None:
         payload["note"] = note
