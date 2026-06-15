@@ -1,8 +1,9 @@
+import os
 import re
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
@@ -65,6 +66,87 @@ def _get_staff_maps() -> tuple[dict[str, dict], dict[str, dict]]:
     return code_to_staff, id_to_staff
 
 
+def _sync_attendances_for_range(start: str, end: str) -> dict:
+    if not DATE_PATTERN.match(start or ""):
+        raise HTTPException(status_code=400, detail="start_date/target_date は YYYY-MM-DD 形式で指定してください。")
+    if not DATE_PATTERN.match(end or ""):
+        raise HTTPException(status_code=400, detail="end_date は YYYY-MM-DD 形式で指定してください。")
+    if end < start:
+        raise HTTPException(status_code=400, detail="end_date は start_date 以降にしてください。")
+
+    items = fetch_attendances(start, end)
+    code_to_staff, _ = _get_staff_maps()
+
+    saved = 0
+    skipped_no_staff: list[str] = []
+    errors: list[dict[str, Any]] = []
+    seen_no_staff: set[str] = set()
+
+    for it in items:
+        employee_id = it.get("employee_id")
+        staff = code_to_staff.get(str(employee_id or "").strip())
+        if not staff:
+            if employee_id and employee_id not in seen_no_staff:
+                seen_no_staff.add(employee_id)
+                skipped_no_staff.append(employee_id)
+            continue
+
+        work_date = it["work_date"]
+        payload = {
+            "work_date": work_date,
+            "staff_id": staff.get("id"),
+            "staff_name": staff.get("staff_name") or "",
+            "staff_code": staff.get("staff_code") or employee_id,
+            "clock_in_at": _normalize_datetime(it.get("clock_in_at"), work_date),
+            "clock_out_at": _normalize_datetime(it.get("clock_out_at"), work_date),
+            "source": "jinjer",
+            "raw_data": it.get("raw_data") or it,
+        }
+
+        try:
+            existing = (
+                supabase.table("attendance_logs")
+                .select("id")
+                .eq("work_date", work_date)
+                .eq("staff_id", staff.get("id"))
+                .eq("source", "jinjer")
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                supabase.table("attendance_logs").update(payload).eq("id", existing.data[0]["id"]).execute()
+            else:
+                supabase.table("attendance_logs").insert(payload).execute()
+            saved += 1
+        except Exception as e:
+            errors.append({"employee_id": employee_id, "date": work_date, "error": str(e)[:200]})
+            if len(errors) > 50:
+                logger.error("sync_jinjer_attendances too many errors")
+                break
+
+    logger.info(
+        f"sync_jinjer_attendances: start={start} end={end} fetched={len(items)} saved={saved} skipped_no_staff={len(skipped_no_staff)} errors={len(errors)}"
+    )
+
+    return {
+        "start_date": start,
+        "end_date": end,
+        "fetched": len(items),
+        "saved": saved,
+        "skipped_no_staff": skipped_no_staff[:50],
+        "errors": errors[:50],
+    }
+
+
+def _verify_cron_key(x_cron_key: str | None) -> None:
+    expected = os.getenv("CRON_SECRET", "")
+    if not expected:
+        logger.error("CRON_SECRET is not set")
+        raise HTTPException(status_code=500, detail="CRON_SECRET が設定されていません。")
+    if not x_cron_key or x_cron_key != expected:
+        raise HTTPException(status_code=401, detail="Invalid cron key")
+
+
 @router.post("/shifts/sync")
 def sync_jinjer_shifts(
     month: str = Body(..., embed=True),
@@ -72,16 +154,6 @@ def sync_jinjer_shifts(
 ):
     """
     Jinjer から指定月のシフトを取得して shift_entries に反映する。
-
-    マッピング:
-      - employee_id  →  staff_members.staff_code で突合
-      - date         →  shift_days.shift_date (無ければ作成)
-      - work_schedule.start  →  shift_entries.start_time
-      - work_schedule.end    →  shift_entries.end_time
-      - status               →  '出勤' (Jinjer に予定があるものは出勤扱い)
-
-    既存の shift_entries は upsert で更新。assigned_area / note は
-    Jinjer 由来に上書きせず保持する（手動で入れた情報を消さない）。
     """
     if not MONTH_PATTERN.match(month or ""):
         raise HTTPException(status_code=400, detail="month は YYYY-MM 形式で指定してください。")
@@ -220,94 +292,29 @@ def sync_jinjer_attendances(
     end_date: str | None = Body(None, embed=True),
     current_user: dict = Depends(require_admin_or_leader),
 ):
-    """
-    Jinjerから打刻データを取得して attendance_logs に保存する。
-
-    基本利用:
-      POST /jinjer/attendances/sync {"target_date":"2026-06-14"}
-
-    期間指定:
-      POST /jinjer/attendances/sync {"start_date":"2026-06-01", "end_date":"2026-06-14"}
-    """
     if target_date:
         start = target_date
         end = target_date
     else:
         start = start_date or date.today().isoformat()
         end = end_date or start
-
-    if not DATE_PATTERN.match(start or ""):
-        raise HTTPException(status_code=400, detail="start_date/target_date は YYYY-MM-DD 形式で指定してください。")
-    if not DATE_PATTERN.match(end or ""):
-        raise HTTPException(status_code=400, detail="end_date は YYYY-MM-DD 形式で指定してください。")
-    if end < start:
-        raise HTTPException(status_code=400, detail="end_date は start_date 以降にしてください。")
-
-    items = fetch_attendances(start, end)
-    code_to_staff, _ = _get_staff_maps()
-
-    saved = 0
-    skipped_no_staff: list[str] = []
-    errors: list[dict[str, Any]] = []
-    seen_no_staff: set[str] = set()
-
-    for it in items:
-        employee_id = it.get("employee_id")
-        staff = code_to_staff.get(str(employee_id or "").strip())
-        if not staff:
-            if employee_id and employee_id not in seen_no_staff:
-                seen_no_staff.add(employee_id)
-                skipped_no_staff.append(employee_id)
-            continue
-
-        work_date = it["work_date"]
-        payload = {
-            "work_date": work_date,
-            "staff_id": staff.get("id"),
-            "staff_name": staff.get("staff_name") or "",
-            "staff_code": staff.get("staff_code") or employee_id,
-            "clock_in_at": _normalize_datetime(it.get("clock_in_at"), work_date),
-            "clock_out_at": _normalize_datetime(it.get("clock_out_at"), work_date),
-            "source": "jinjer",
-            "raw_data": it.get("raw_data") or it,
-        }
-
-        try:
-            existing = (
-                supabase.table("attendance_logs")
-                .select("id")
-                .eq("work_date", work_date)
-                .eq("staff_id", staff.get("id"))
-                .eq("source", "jinjer")
-                .limit(1)
-                .execute()
-            )
-            if existing.data:
-                supabase.table("attendance_logs").update(payload).eq("id", existing.data[0]["id"]).execute()
-            else:
-                supabase.table("attendance_logs").insert(payload).execute()
-            saved += 1
-        except Exception as e:
-            errors.append({"employee_id": employee_id, "date": work_date, "error": str(e)[:200]})
-            if len(errors) > 50:
-                logger.error("sync_jinjer_attendances too many errors")
-                break
-
-    logger.info(
-        f"sync_jinjer_attendances: start={start} end={end} fetched={len(items)} saved={saved} skipped_no_staff={len(skipped_no_staff)} errors={len(errors)}"
-    )
-
-    return {
-        "start_date": start,
-        "end_date": end,
-        "fetched": len(items),
-        "saved": saved,
-        "skipped_no_staff": skipped_no_staff[:50],
-        "errors": errors[:50],
-    }
+    return _sync_attendances_for_range(start, end)
 
 
 @router.post("/attendances/sync-today")
 def sync_jinjer_attendances_today(current_user: dict = Depends(require_admin_or_leader)):
     today = date.today().isoformat()
-    return sync_jinjer_attendances(target_date=today, current_user=current_user)
+    return _sync_attendances_for_range(today, today)
+
+
+@router.post("/attendances/cron-sync")
+def cron_sync_jinjer_attendances(
+    x_cron_key: str | None = Header(None, alias="X-CRON-KEY"),
+):
+    """
+    Render Cron Job 用。
+    JWTではなく X-CRON-KEY で認証し、本日のJinjer打刻を同期する。
+    """
+    _verify_cron_key(x_cron_key)
+    today = date.today().isoformat()
+    return _sync_attendances_for_range(today, today)
