@@ -8,6 +8,7 @@ from app.routers.task_times import router as task_times_router
 from app.routers.tasks import router as tasks_router
 from app.routers.beds24 import router as beds24_router
 from app.routers.auth import router as auth_router
+from app.routers.employee_tasks_override import router as employee_tasks_router
 from app.routers.employee import router as employee_router
 from app.routers.admin_portal import router as admin_portal_router
 from app.routers.jinjer import router as jinjer_router
@@ -50,13 +51,12 @@ def root():
     return {"status": "ok"}
 
 
-# /staffs と /staffs/upsert は accounts_router を優先する
 app.include_router(accounts_router)
-# /tasks/update は task_times_router を優先する
 app.include_router(task_times_router)
 app.include_router(tasks_router)
 app.include_router(beds24_router)
 app.include_router(auth_router)
+app.include_router(employee_tasks_router)
 app.include_router(employee_router)
 app.include_router(admin_portal_router)
 app.include_router(jinjer_router)
