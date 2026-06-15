@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 
 from app.logger import get_logger
 from app.routers.accounts import router as accounts_router
+from app.routers.task_times import router as task_times_router
 from app.routers.tasks import router as tasks_router
 from app.routers.beds24 import router as beds24_router
 from app.routers.auth import router as auth_router
@@ -51,6 +52,8 @@ def root():
 
 # /staffs と /staffs/upsert は accounts_router を優先する
 app.include_router(accounts_router)
+# /tasks/update は task_times_router を優先する
+app.include_router(task_times_router)
 app.include_router(tasks_router)
 app.include_router(beds24_router)
 app.include_router(auth_router)
