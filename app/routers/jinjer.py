@@ -29,13 +29,23 @@ def _normalize_time(t: str | None) -> str | None:
 
 
 def _normalize_datetime(value: Any, work_date: str) -> str | None:
+    """
+    Jinjerの打刻時刻は日本時間として返る。
+    Supabaseのtimestamptzにそのまま保存するとUTC扱いになり9時間ずれるため、
+    タイムゾーンが無い値には +09:00 を明示する。
+    """
     if not value:
         return None
     s = str(value).strip()
     if not s:
         return None
-    if "T" in s or "+" in s or s.endswith("Z"):
+    if s.endswith("Z") or re.search(r"[+-]\d{2}:?\d{2}$", s):
         return s
+    if re.match(r"^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}", s):
+        normalized = s.replace(" ", "T")
+        if re.match(r"^\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}$", normalized):
+            normalized = f"{normalized}:00"
+        return f"{normalized}+09:00"
     if re.match(r"^\d{1,2}:\d{2}", s):
         return f"{work_date}T{s[:5]}:00+09:00"
     return s
