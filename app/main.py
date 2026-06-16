@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from app.logger import get_logger
 from app.routers.accounts import router as accounts_router
 from app.routers.task_times import router as task_times_router
+from app.routers.facility_property_override import router as facility_property_router
 from app.routers.facility_trouble import router as facility_trouble_router
 from app.routers.tasks import router as tasks_router
 from app.routers.beds24 import router as beds24_router
@@ -55,6 +56,8 @@ def root():
 
 app.include_router(accounts_router)
 app.include_router(task_times_router)
+# facilities 系は property_id 補完版を優先する
+app.include_router(facility_property_router)
 app.include_router(facility_trouble_router)
 app.include_router(tasks_router)
 app.include_router(beds24_router)
