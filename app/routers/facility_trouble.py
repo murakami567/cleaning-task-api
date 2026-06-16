@@ -10,9 +10,19 @@ from app.services.auth_service import get_current_user_id
 router = APIRouter(tags=["facility-trouble"])
 logger = get_logger(__name__)
 
+FACILITY_STATUSES = ["保留", "対応中", "対応済み"]
+
 
 def _today() -> str:
     return date.today().isoformat()
+
+
+def _normalize_status(status: str | None) -> str:
+    if status in ["完了", "対応完了", "対応済み"]:
+        return "対応済み"
+    if status == "対応中":
+        return "対応中"
+    return "保留"
 
 
 def _get_staff_name(user_id: str) -> str:
@@ -44,7 +54,11 @@ def get_facilities():
     except Exception as e:
         logger.error(f"get_facilities failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="設備情報の取得に失敗しました。")
-    return res.data or []
+
+    rows = res.data or []
+    for row in rows:
+        row["status"] = _normalize_status(row.get("status"))
+    return rows
 
 
 @router.post("/facilities/create")
@@ -62,6 +76,7 @@ def create_facility(
     reporter_name: str | None = Body(None),
     photo_url: str | None = Body(None),
 ):
+    normalized_status = _normalize_status(status)
     payload = {
         "property_id": property_id,
         "property_name": property_name,
@@ -69,8 +84,8 @@ def create_facility(
         "assignee": assignee,
         "content": content,
         "start_date": start_date or report_date or _today(),
-        "end_date": end_date,
-        "status": status,
+        "end_date": end_date or (_today() if normalized_status == "対応済み" else None),
+        "status": normalized_status,
         "note": note,
         "report_date": report_date or start_date or _today(),
         "reporter_name": reporter_name or assignee or "",
@@ -102,6 +117,7 @@ def update_facility(
     reporter_name: str | None = Body(None),
     photo_url: str | None = Body(None),
 ):
+    normalized_status = _normalize_status(status) if status is not None else None
     payload: dict[str, Any] = {}
     for key, value in {
         "property_id": property_id,
@@ -111,7 +127,7 @@ def update_facility(
         "content": content,
         "start_date": start_date,
         "end_date": end_date,
-        "status": status,
+        "status": normalized_status,
         "note": note,
         "report_date": report_date,
         "reporter_name": reporter_name,
@@ -120,7 +136,7 @@ def update_facility(
         if value is not None:
             payload[key] = value
 
-    if status == "対応完了" and not payload.get("end_date"):
+    if normalized_status == "対応済み" and not payload.get("end_date"):
         payload["end_date"] = _today()
 
     if not payload:
