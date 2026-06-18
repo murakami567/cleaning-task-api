@@ -18,6 +18,7 @@ from app.routers.jinjer import router as jinjer_router
 from app.routers.lineworks import router as lineworks_router
 from app.routers.mate_carte import router as mate_carte_router
 from app.routers.backups import router as backups_router
+from app.routers.monthly_reports import router as monthly_reports_router
 from app.routers import payroll
 
 logger = get_logger(__name__)
@@ -64,6 +65,7 @@ app.include_router(jinjer_router)
 app.include_router(lineworks_router)
 app.include_router(mate_carte_router)
 app.include_router(backups_router)
+app.include_router(monthly_reports_router)
 app.include_router(payroll.router)
 
 logger.info("cleaning-task-api started")
