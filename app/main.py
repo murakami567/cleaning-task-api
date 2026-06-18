@@ -17,6 +17,7 @@ from app.routers.admin_portal import router as admin_portal_router
 from app.routers.jinjer import router as jinjer_router
 from app.routers.lineworks import router as lineworks_router
 from app.routers.mate_carte import router as mate_carte_router
+from app.routers.backups import router as backups_router
 from app.routers import payroll
 
 logger = get_logger(__name__)
@@ -39,14 +40,8 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(
-        f"Unhandled error: {request.method} {request.url.path} - {exc}",
-        exc_info=True,
-    )
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "サーバーエラーが発生しました。"},
-    )
+    logger.error(f"Unhandled error: {request.method} {request.url.path} - {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "サーバーエラーが発生しました。"})
 
 
 @app.get("/")
@@ -56,7 +51,6 @@ def root():
 
 app.include_router(accounts_router)
 app.include_router(task_times_router)
-# facilities 系は property_id 補完版を優先する
 app.include_router(facility_property_router)
 app.include_router(facility_trouble_router)
 app.include_router(tasks_router)
@@ -64,12 +58,12 @@ app.include_router(beds24_router)
 app.include_router(auth_router)
 app.include_router(employee_tasks_router)
 app.include_router(employee_router)
-# /api/admin-portal/home は無効アカウント除外版を優先する
 app.include_router(admin_home_active_router)
 app.include_router(admin_portal_router)
 app.include_router(jinjer_router)
 app.include_router(lineworks_router)
 app.include_router(mate_carte_router)
+app.include_router(backups_router)
 app.include_router(payroll.router)
 
 logger.info("cleaning-task-api started")
