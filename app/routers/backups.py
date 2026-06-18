@@ -137,7 +137,16 @@ def _drive_service():
 def _drive_upload_text(service: Any, folder_id: str, filename: str, content: str, mime_type: str) -> str:
     media = MediaIoBaseUpload(io.BytesIO(content.encode("utf-8-sig")), mimetype=mime_type, resumable=False)
     metadata = {"name": filename, "parents": [folder_id]}
-    created = service.files().create(body=metadata, media_body=media, fields="id").execute()
+    created = (
+        service.files()
+        .create(
+            body=metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
     return created.get("id")
 
 
