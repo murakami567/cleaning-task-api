@@ -5,3 +5,5 @@ supabase
 requests
 pandas
 PyJWT[crypto]
+google-api-python-client
+google-auth
