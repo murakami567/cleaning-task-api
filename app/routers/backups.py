@@ -11,6 +11,15 @@ from fastapi import APIRouter, Header, HTTPException
 from app.db import supabase
 from app.logger import get_logger
 
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+except Exception:  # pragma: no cover
+    service_account = None
+    build = None
+    MediaIoBaseUpload = None
+
 router = APIRouter(prefix="/backups", tags=["backups"])
 logger = get_logger(__name__)
 
@@ -31,6 +40,7 @@ BACKUP_TABLES = [
 
 PAGE_SIZE = 1000
 DEFAULT_RETENTION_DAYS = 30
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 
 def _now_iso() -> str:
@@ -108,6 +118,66 @@ def _delete_old_backups(retention_days: int) -> int:
         return 0
 
 
+def _drive_enabled() -> bool:
+    return bool(os.getenv("GOOGLE_DRIVE_BACKUP_FOLDER_ID") and os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
+
+
+def _drive_service():
+    if not _drive_enabled():
+        return None
+    if service_account is None or build is None or MediaIoBaseUpload is None:
+        raise RuntimeError("google drive dependencies are not installed")
+
+    raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or ""
+    info = json.loads(raw)
+    credentials = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+
+def _drive_upload_text(service: Any, folder_id: str, filename: str, content: str, mime_type: str) -> str:
+    media = MediaIoBaseUpload(io.BytesIO(content.encode("utf-8-sig")), mimetype=mime_type, resumable=False)
+    metadata = {"name": filename, "parents": [folder_id]}
+    created = service.files().create(body=metadata, media_body=media, fields="id").execute()
+    return created.get("id")
+
+
+def _upload_backup_to_drive(
+    backup_id: str,
+    backup_date: str,
+    table_payloads: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    if not _drive_enabled():
+        return []
+
+    service = _drive_service()
+    if service is None:
+        return []
+
+    folder_id = os.getenv("GOOGLE_DRIVE_BACKUP_FOLDER_ID") or ""
+    uploads: list[dict[str, str]] = []
+
+    summary_json = json.dumps(
+        {
+            "backup_id": backup_id,
+            "backup_date": backup_date,
+            "tables": {name: payload["json_data"] for name, payload in table_payloads.items()},
+        },
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+    summary_name = f"{backup_date}_{backup_id}_all_tables.json"
+    summary_id = _drive_upload_text(service, folder_id, summary_name, summary_json, "application/json")
+    uploads.append({"filename": summary_name, "file_id": summary_id, "type": "json"})
+
+    for table_name, payload in table_payloads.items():
+        csv_name = f"{backup_date}_{backup_id}_{table_name}.csv"
+        csv_id = _drive_upload_text(service, folder_id, csv_name, payload["csv_data"], "text/csv")
+        uploads.append({"filename": csv_name, "file_id": csv_id, "type": "csv"})
+
+    return uploads
+
+
 @router.post("/run")
 def run_backup(
     x_backup_key: str | None = Header(default=None, alias="X-BACKUP-KEY"),
@@ -121,6 +191,8 @@ def run_backup(
     created_at = _now_iso()
     results: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    drive_uploads: list[dict[str, str]] = []
+    table_payloads: dict[str, dict[str, Any]] = {}
 
     for table_name in BACKUP_TABLES:
         try:
@@ -137,20 +209,27 @@ def run_backup(
                 "created_at": created_at,
             }
             supabase.table("backups").insert(payload).execute()
+            table_payloads[table_name] = payload
             results.append({
                 "table_name": table_name,
                 "row_count": len(rows),
-                "json_bytes": len(json.dumps(json_data, ensure_ascii=False)),
+                "json_bytes": len(json.dumps(json_data, ensure_ascii=False, default=str)),
                 "csv_bytes": len(csv_data.encode("utf-8")),
             })
         except Exception as e:
             logger.error(f"backup failed: table={table_name} error={e}", exc_info=True)
             errors.append({"table_name": table_name, "error": str(e)})
 
+    try:
+        drive_uploads = _upload_backup_to_drive(backup_id, backup_date, table_payloads)
+    except Exception as e:
+        logger.error(f"google drive backup upload failed: {e}", exc_info=True)
+        errors.append({"table_name": "google_drive", "error": str(e)})
+
     deleted_old = _delete_old_backups(retention_days)
     ok = len(errors) == 0
     logger.info(
-        f"backup completed: backup_id={backup_id} ok={ok} tables={len(results)} errors={len(errors)} deleted_old={deleted_old}"
+        f"backup completed: backup_id={backup_id} ok={ok} tables={len(results)} drive_uploads={len(drive_uploads)} errors={len(errors)} deleted_old={deleted_old}"
     )
     return {
         "ok": ok,
@@ -158,6 +237,8 @@ def run_backup(
         "backup_date": backup_date,
         "created_at": created_at,
         "tables": results,
+        "drive_enabled": _drive_enabled(),
+        "drive_uploads": drive_uploads,
         "errors": errors,
         "deleted_old": deleted_old,
         "retention_days": retention_days,
