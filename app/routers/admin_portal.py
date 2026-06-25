@@ -1,10 +1,14 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_or_leader
+
+
+def _today_jst_iso() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).date().isoformat()
 
 
 def _calc_towel_count(property_name: str, next_guest_count, next_stay_nights):
@@ -84,6 +88,16 @@ def _get_today_attendance_map(today: str) -> dict[str, dict]:
     return {}
 
 
+def _is_active_shift_entry(entry: dict) -> bool:
+    staff = entry.get("staff_members") or {}
+    if staff.get("is_active") is False:
+        return False
+    status = str(entry.get("status") or "")
+    if status in ["休み", "定休", "欠勤", "off", "OFF", "休"]:
+        return False
+    return True
+
+
 def _enrich_shift_with_attendance(today_shift: dict | None, attendance_map: dict[str, dict]) -> dict | None:
     if not today_shift:
         return today_shift
@@ -92,6 +106,9 @@ def _enrich_shift_with_attendance(today_shift: dict | None, attendance_map: dict
     enriched_entries = []
 
     for entry in entries:
+        if not _is_active_shift_entry(entry):
+            continue
+
         staff = entry.get("staff_members") or {}
         staff_id = entry.get("staff_id") or staff.get("id") or entry.get("user_id")
         attendance = attendance_map.get(staff_id or "", {})
@@ -122,7 +139,7 @@ def _enrich_shift_with_attendance(today_shift: dict | None, attendance_map: dict
 
 @router.get("/home")
 def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
-    today = date.today().isoformat()
+    today = _today_jst_iso()
     try:
         message_res = (
             supabase
@@ -159,7 +176,7 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
     today_shift = _enrich_shift_with_attendance(today_shift, attendance_map)
 
     logger.info(
-        f"get_admin_home: today={today} attendance_count={len(attendance_map)}"
+        f"get_admin_home: jst_today={today} attendance_count={len(attendance_map)}"
     )
     return {
         "todayDate": today,
@@ -369,193 +386,3 @@ def delete_calendar_schedule(
 
     logger.info(f"delete_calendar_schedule: id={schedule_id}")
     return {"ok": True, "data": res.data}
-
-
-@router.get("/worklogs/today")
-def get_today_worklogs(
-    date: str | None = None,
-    current_user: dict = Depends(require_admin_or_leader),
-):
-    from datetime import datetime
-
-    target_date = date or datetime.today().strftime("%Y-%m-%d")
-
-    try:
-        worklog_res = (
-            supabase
-            .table("worklogs")
-            .select("*")
-            .eq("work_date", target_date)
-            .order("start_time")
-            .execute()
-        )
-
-        worklogs = worklog_res.data or []
-
-        user_ids = list({
-            row.get("user_id")
-            for row in worklogs
-            if row.get("user_id")
-        })
-
-        staff_map = {}
-
-        if user_ids:
-            staff_res = (
-                supabase
-                .table("staff_members")
-                .select("id, staff_name, staff_code")
-                .in_("id", user_ids)
-                .execute()
-            )
-
-            for row in staff_res.data or []:
-                staff_map[row.get("id")] = {
-                    "staff_name": row.get("staff_name") or "",
-                    "staff_code": row.get("staff_code") or "",
-                }
-    except Exception as e:
-        logger.error(f"get_today_worklogs failed: date={target_date} {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="実働ログの取得に失敗しました。")
-
-    def calc_work_minutes(work_start_time: str | None, end_time: str | None, break_minutes: int | None):
-        if not work_start_time or not end_time:
-            return 0
-        try:
-            start_dt = datetime.strptime(work_start_time, "%H:%M")
-            end_dt = datetime.strptime(end_time, "%H:%M")
-            minutes = int((end_dt - start_dt).total_seconds() / 60)
-            minutes -= int(break_minutes or 0)
-            return max(minutes, 0)
-        except Exception:
-            return 0
-
-    result = []
-    for row in worklogs:
-        staff_info = staff_map.get(row.get("user_id"), {})
-        result.append({
-            "id": row.get("id"),
-            "user_id": row.get("user_id"),
-            "staff_name": staff_info.get("staff_name", ""),
-            "staff_code": staff_info.get("staff_code", ""),
-            "work_date": row.get("work_date") or "",
-            "property_name": row.get("property_name") or "",
-            "room_name": row.get("room_name") or "",
-            "work_start_time": row.get("work_start_time") or "",
-            "start_time": row.get("start_time") or "",
-            "end_time": row.get("end_time") or "",
-            "break_minutes": row.get("break_minutes") or 0,
-            "work_type": row.get("work_type") or "",
-            "note": row.get("note") or "",
-            "created_at": row.get("created_at") or "",
-            "work_minutes": calc_work_minutes(
-                row.get("work_start_time"),
-                row.get("end_time"),
-                row.get("break_minutes"),
-            ),
-        })
-
-    logger.info(f"get_today_worklogs: date={target_date} count={len(result)}")
-    return {"date": target_date, "worklogs": result}
-
-
-@router.get("/prep-list")
-def get_prep_list(current_user: dict = Depends(require_admin_or_leader)):
-    """
-    翌日以降の清掃タスクを部屋マスタの準備物 (D / S / 予備S / タ) と結合して返す。
-    タオル数は cleaning_tasks の next_guest_count / next_stay_nights から算出。
-    備考は cleaning_tasks.note。
-    """
-    today = date.today().isoformat()
-
-    try:
-        tasks_res = (
-            supabase.table("cleaning_tasks")
-            .select("*")
-            .gt("task_date", today)
-            .order("task_date")
-            .order("property_name")
-            .order("room_name")
-            .execute()
-        )
-
-        rooms_res = (
-            supabase.table("rooms")
-            .select("room_key, prep_d, prep_s, prep_spare_s, prep_ta")
-            .execute()
-        )
-    except Exception as e:
-        logger.error(f"get_prep_list failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="準備物一覧の取得に失敗しました。")
-
-    room_lookup = {}
-    for row in rooms_res.data or []:
-        key = row.get("room_key")
-        if key:
-            room_lookup[key] = row
-
-    items = []
-    for t in tasks_res.data or []:
-        room_key = t.get("room_key")
-        room = room_lookup.get(room_key, {})
-
-        items.append({
-            "task_id": t.get("id"),
-            "task_date": t.get("task_date") or "",
-            "property_name": t.get("property_name") or "",
-            "room_name": t.get("room_name") or "",
-            "room_key": room_key or "",
-            "towel_count": _calc_towel_count(
-                t.get("property_name") or "",
-                t.get("next_guest_count"),
-                t.get("next_stay_nights"),
-            ),
-            "prep_d": int(room.get("prep_d") or 0),
-            "prep_s": int(room.get("prep_s") or 0),
-            "prep_spare_s": int(room.get("prep_spare_s") or 0),
-            "prep_ta": int(room.get("prep_ta") or 0),
-            "note": t.get("note") or "",
-        })
-
-    logger.info(f"get_prep_list: count={len(items)}")
-    return {"items": items}
-
-
-@router.get("/lost-items")
-def get_lost_items(current_user: dict = Depends(require_admin_or_leader)):
-    """
-    スタッフから報告された忘れ物の一覧。新しい順に返す。
-    既存テーブルの found_date / item_name / image_url を
-    フロント互換のキー (task_date / item_description / photo_url) に
-    マッピングして返す。
-    """
-    try:
-        res = (
-            supabase.table("lost_items")
-            .select("*")
-            .order("created_at", desc=True)
-            .execute()
-        )
-    except Exception as e:
-        logger.error(f"get_lost_items failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="忘れ物一覧の取得に失敗しました。")
-
-    items = []
-    for row in res.data or []:
-        items.append({
-            "id": row.get("id"),
-            "task_id": None,
-            "task_date": row.get("found_date") or "",
-            "property_name": row.get("property_name") or "",
-            "room_name": row.get("room_name") or "",
-            "item_description": row.get("item_name") or "",
-            "photo_url": row.get("image_url") or "",
-            "status": row.get("status") or "",
-            "note": row.get("note") or "",
-            "reported_by": row.get("created_by_staff_code") or "",
-            "reported_by_name": row.get("created_by_staff_name") or "",
-            "created_at": row.get("created_at") or "",
-        })
-
-    logger.info(f"get_lost_items: count={len(items)}")
-    return {"items": items}
