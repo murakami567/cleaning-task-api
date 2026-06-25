@@ -32,19 +32,6 @@ def _date_key(value: Any) -> str:
     return str(value or "")[:10]
 
 
-def _merge_unique_tasks(*lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: dict[str, dict[str, Any]] = {}
-    anonymous_index = 0
-    for rows in lists:
-        for row in rows or []:
-            key = str(row.get("id") or "")
-            if not key:
-                anonymous_index += 1
-                key = f"anonymous-{anonymous_index}"
-            merged[key] = row
-    return list(merged.values())
-
-
 @router.get("/properties")
 def get_properties():
     try:
@@ -217,37 +204,27 @@ def get_shift_board(year: int, month: int):
             .execute()
         )
 
-        # 基本は task_date（清掃日）で集計。
-        # 古い取り込みデータや一部のCSV由来データで task_date が未設定の場合に備え、checkout_date もフォールバックとして見る。
-        task_by_task_date_res = (
+        # タスク管理と同じく task_date（清掃日）だけを正とする。
+        # checkout_date は予約上のチェックアウト日であり、シフト表の清掃日集計には使わない。
+        task_res = (
             supabase.table("cleaning_tasks")
-            .select("id, task_date, checkout_date, status, load_score")
+            .select("id, task_date, status, load_score")
             .gte("task_date", start_iso)
             .lt("task_date", end_iso)
             .execute()
         )
-        task_by_checkout_date_res = (
-            supabase.table("cleaning_tasks")
-            .select("id, task_date, checkout_date, status, load_score")
-            .gte("checkout_date", start_iso)
-            .lt("checkout_date", end_iso)
-            .execute()
-        )
-
-        tasks = _merge_unique_tasks(
-            task_by_task_date_res.data or [],
-            task_by_checkout_date_res.data or [],
-        )
 
         cleaning_counts: dict[str, int] = {}
         workload_score: dict[str, int] = {}
-        for row in tasks:
+        excluded_statuses = {"CXL", "キャンセル", "cancelled", "Cancelled"}
+
+        for row in task_res.data or []:
             status = str(row.get("status") or "")
-            if status in {"CXL", "キャンセル", "cancelled", "Cancelled"}:
+            if status in excluded_statuses:
                 continue
 
-            d = _date_key(row.get("task_date")) or _date_key(row.get("checkout_date"))
-            if not d or d < start_iso or d >= end_iso:
+            d = _date_key(row.get("task_date"))
+            if not d:
                 continue
 
             cleaning_counts[d] = cleaning_counts.get(d, 0) + 1
@@ -278,9 +255,8 @@ def get_shift_board(year: int, month: int):
             "workload": workload,
             "workload_score": workload_score,
             "debug": {
-                "task_date_rows": len(task_by_task_date_res.data or []),
-                "checkout_date_rows": len(task_by_checkout_date_res.data or []),
-                "merged_task_rows": len(tasks),
+                "task_date_rows": len(task_res.data or []),
+                "counted_days": cleaning_counts,
             },
         }
     except Exception as e:
