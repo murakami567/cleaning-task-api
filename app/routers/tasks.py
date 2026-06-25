@@ -10,6 +10,10 @@ router = APIRouter(tags=["tasks"])
 logger = get_logger(__name__)
 
 
+def _today_jst_iso() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).date().isoformat()
+
+
 def _auto_progress_started_tasks():
     """
     「清掃開始」状態で cleaning_started_at から 1 分経過したタスクを「清掃中」へ自動遷移させる。
@@ -29,11 +33,9 @@ def _auto_progress_started_tasks():
 # =========================================================
 @router.get("/tasks/today")
 def get_today_tasks():
-    from datetime import date
-
     _auto_progress_started_tasks()
 
-    today = date.today().isoformat()
+    today = _today_jst_iso()
     try:
         res = (
             supabase.table("cleaning_tasks")
@@ -45,17 +47,15 @@ def get_today_tasks():
         logger.error(f"get_today_tasks failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="本日のタスク取得に失敗しました。")
 
-    logger.info(f"get_today_tasks: date={today} count={len(res.data or [])}")
+    logger.info(f"get_today_tasks: jst_date={today} count={len(res.data or [])}")
     return res.data
 
 
 @router.get("/tasks/future")
 def get_future_tasks():
-    from datetime import date
-
     _auto_progress_started_tasks()
 
-    today = date.today().isoformat()
+    today = _today_jst_iso()
     try:
         res = (
             supabase.table("cleaning_tasks")
@@ -68,7 +68,7 @@ def get_future_tasks():
         logger.error(f"get_future_tasks failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="将来のタスク取得に失敗しました。")
 
-    logger.info(f"get_future_tasks: count={len(res.data or [])}")
+    logger.info(f"get_future_tasks: jst_date={today} count={len(res.data or [])}")
     return res.data
 
 
