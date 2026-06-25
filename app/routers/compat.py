@@ -32,6 +32,29 @@ def _date_key(value: Any) -> str:
     return str(value or "")[:10]
 
 
+def _fetch_all_cleaning_tasks_for_count() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    page_size = 1000
+    start = 0
+
+    while True:
+        end = start + page_size - 1
+        res = (
+            supabase.table("cleaning_tasks")
+            .select("id, task_date, checkout_date, status, load_score")
+            .order("task_date")
+            .range(start, end)
+            .execute()
+        )
+        batch = res.data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        start += page_size
+
+    return rows
+
+
 @router.get("/properties")
 def get_properties():
     try:
@@ -204,27 +227,21 @@ def get_shift_board(year: int, month: int):
             .execute()
         )
 
-        # タスク管理と同じく task_date（清掃日）だけを正とする。
-        # checkout_date は予約上のチェックアウト日であり、シフト表の清掃日集計には使わない。
-        task_res = (
-            supabase.table("cleaning_tasks")
-            .select("id, task_date, status, load_score")
-            .gte("task_date", start_iso)
-            .lt("task_date", end_iso)
-            .execute()
-        )
+        # DB側の日付比較に頼らず、タスク管理と同じ task_date をPython側で月内判定する。
+        # これにより task_date の型・形式差分で0件になる事故を避ける。
+        task_rows = _fetch_all_cleaning_tasks_for_count()
 
         cleaning_counts: dict[str, int] = {}
         workload_score: dict[str, int] = {}
         excluded_statuses = {"CXL", "キャンセル", "cancelled", "Cancelled"}
 
-        for row in task_res.data or []:
+        for row in task_rows:
             status = str(row.get("status") or "")
             if status in excluded_statuses:
                 continue
 
             d = _date_key(row.get("task_date"))
-            if not d:
+            if not d or d < start_iso or d >= end_iso:
                 continue
 
             cleaning_counts[d] = cleaning_counts.get(d, 0) + 1
@@ -255,7 +272,7 @@ def get_shift_board(year: int, month: int):
             "workload": workload,
             "workload_score": workload_score,
             "debug": {
-                "task_date_rows": len(task_res.data or []),
+                "all_task_rows": len(task_rows),
                 "counted_days": cleaning_counts,
             },
         }
