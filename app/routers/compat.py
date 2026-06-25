@@ -14,6 +14,20 @@ def _safe_data(res: Any):
     return res.data if getattr(res, "data", None) is not None else []
 
 
+def _month_range(year: int, month: int) -> tuple[date, date]:
+    start = date(year, month, 1)
+    if month == 12:
+        end = date(year + 1, 1, 1)
+    else:
+        end = date(year, month + 1, 1)
+    return start, end
+
+
+def _count_working_entries(entries: list[dict[str, Any]]) -> int:
+    off_values = {"休み", "定休", "欠勤", "off", "OFF", "休"}
+    return len([e for e in entries if str(e.get("status") or "") not in off_values])
+
+
 @router.get("/properties")
 def get_properties():
     try:
@@ -60,6 +74,11 @@ def get_shifts(shift_date: str | None = None):
 
 @router.post("/shifts/create_day")
 def create_shift_day(shift_date: str = Body(...), note: str = Body("")):
+    return get_or_create_shift_day(shift_date=shift_date, note=note)
+
+
+@router.post("/shifts/get_or_create_day")
+def get_or_create_shift_day(shift_date: str = Body(...), note: str = Body("")):
     try:
         existing = (
             supabase.table("shift_days")
@@ -82,8 +101,54 @@ def create_shift_day(shift_date: str = Body(...), note: str = Body("")):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"compat create_shift_day failed: shift_date={shift_date} {e}", exc_info=True)
+        logger.error(f"compat get_or_create_shift_day failed: shift_date={shift_date} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="shift day creation failed")
+
+
+@router.post("/shifts/upsert_entry")
+def upsert_shift_entry(
+    shift_day_id: str = Body(...),
+    staff_id: str = Body(...),
+    status: str = Body(...),
+    start_time: str | None = Body(None),
+    end_time: str | None = Body(None),
+    assigned_area: str | None = Body(None),
+    note: str | None = Body(None),
+):
+    try:
+        existing = (
+            supabase.table("shift_entries")
+            .select("*")
+            .eq("shift_day_id", shift_day_id)
+            .eq("staff_id", staff_id)
+            .limit(1)
+            .execute()
+        )
+        payload = {
+            "shift_day_id": shift_day_id,
+            "staff_id": staff_id,
+            "status": status,
+            "start_time": start_time,
+            "end_time": end_time,
+            "assigned_area": assigned_area or "",
+            "note": note or "",
+        }
+        if existing.data:
+            res = (
+                supabase.table("shift_entries")
+                .update(payload)
+                .eq("id", existing.data[0].get("id"))
+                .execute()
+            )
+        else:
+            res = supabase.table("shift_entries").insert(payload).execute()
+        return {"ok": True, "data": _safe_data(res)}
+    except Exception as e:
+        logger.error(
+            f"compat upsert_shift_entry failed: shift_day_id={shift_day_id} staff_id={staff_id} {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="shift entry upsert failed")
 
 
 @router.get("/staff-schedules")
@@ -112,13 +177,19 @@ def get_staff_schedules(shift_date: str):
 @router.get("/shift-board")
 def get_shift_board(year: int, month: int):
     try:
-        start = date(year, month, 1)
-        if month == 12:
-            end = date(year + 1, 1, 1)
-        else:
-            end = date(year, month + 1, 1)
+        start, end = _month_range(year, month)
 
-        res = (
+        staff_res = (
+            supabase.table("staff_members")
+            .select("id, staff_code, staff_name, role, is_active, sort_order")
+            .eq("is_active", True)
+            .in_("role", ["staff", "checker", "leader", "sub_admin", "admin"])
+            .order("sort_order")
+            .order("staff_name")
+            .execute()
+        )
+
+        shift_res = (
             supabase.table("shift_days")
             .select("*, shift_entries(*, staff_members(*))")
             .gte("shift_date", start.isoformat())
@@ -126,7 +197,49 @@ def get_shift_board(year: int, month: int):
             .order("shift_date")
             .execute()
         )
-        return {"year": year, "month": month, "days": _safe_data(res)}
+
+        task_res = (
+            supabase.table("cleaning_tasks")
+            .select("id, task_date, load_score")
+            .gte("task_date", start.isoformat())
+            .lt("task_date", end.isoformat())
+            .execute()
+        )
+
+        cleaning_counts: dict[str, int] = {}
+        workload_score: dict[str, int] = {}
+        for row in task_res.data or []:
+            d = str(row.get("task_date") or "")[:10]
+            if not d:
+                continue
+            cleaning_counts[d] = cleaning_counts.get(d, 0) + 1
+            try:
+                score = int(row.get("load_score") or 0)
+            except Exception:
+                score = 0
+            workload_score[d] = workload_score.get(d, 0) + score
+
+        attendance_counts: dict[str, int] = {}
+        for day in shift_res.data or []:
+            d = str(day.get("shift_date") or "")[:10]
+            entries = day.get("shift_entries") if isinstance(day.get("shift_entries"), list) else []
+            attendance_counts[d] = _count_working_entries(entries)
+
+        workload: dict[str, float] = {}
+        for d, count in cleaning_counts.items():
+            attendance = attendance_counts.get(d, 0)
+            workload[d] = round(count / attendance, 1) if attendance > 0 else 0
+
+        return {
+            "year": year,
+            "month": month,
+            "staffs": staff_res.data or [],
+            "days": shift_res.data or [],
+            "cleaning_counts": cleaning_counts,
+            "attendance_counts": attendance_counts,
+            "workload": workload,
+            "workload_score": workload_score,
+        }
     except Exception as e:
         logger.error(f"compat get_shift_board failed: year={year} month={month} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="shift board fetch failed")
