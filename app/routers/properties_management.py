@@ -1,0 +1,97 @@
+from fastapi import APIRouter, Body, HTTPException
+
+from app.db import supabase
+from app.logger import get_logger
+
+router = APIRouter(tags=["properties"])
+logger = get_logger(__name__)
+
+
+def _normalize_max_assignable_count(value) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        n = int(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="max_assignable_count must be a number")
+    if n < 0:
+        raise HTTPException(status_code=400, detail="max_assignable_count must be 0 or more")
+    return n
+
+
+@router.post("/properties/create")
+def create_property(
+    property_code: str = Body(...),
+    property_name: str = Body(...),
+    normalized_name: str | None = Body(None),
+    sort_order: int | None = Body(999),
+    is_active: bool = Body(True),
+    max_assignable_count: int | None = Body(None),
+):
+    payload = {
+        "property_code": property_code.strip(),
+        "property_name": property_name.strip(),
+        "normalized_name": (normalized_name or property_name).strip(),
+        "sort_order": sort_order if sort_order is not None else 999,
+        "is_active": is_active,
+        "max_assignable_count": _normalize_max_assignable_count(max_assignable_count),
+    }
+
+    if not payload["property_code"]:
+        raise HTTPException(status_code=400, detail="property_code is required")
+    if not payload["property_name"]:
+        raise HTTPException(status_code=400, detail="property_name is required")
+
+    try:
+        res = supabase.table("properties").insert(payload).execute()
+    except Exception as e:
+        logger.error(f"create_property failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="property creation failed")
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="property creation failed")
+    return res.data[0]
+
+
+@router.post("/properties/update")
+def update_property(
+    property_id: str = Body(...),
+    property_code: str | None = Body(None),
+    property_name: str | None = Body(None),
+    normalized_name: str | None = Body(None),
+    sort_order: int | None = Body(None),
+    is_active: bool | None = Body(None),
+    max_assignable_count: int | None = Body(None),
+):
+    payload = {}
+
+    if property_code is not None:
+        payload["property_code"] = property_code.strip()
+    if property_name is not None:
+        payload["property_name"] = property_name.strip()
+    if normalized_name is not None:
+        payload["normalized_name"] = normalized_name.strip()
+    if sort_order is not None:
+        payload["sort_order"] = sort_order
+    if is_active is not None:
+        payload["is_active"] = is_active
+    if max_assignable_count is not None:
+        payload["max_assignable_count"] = _normalize_max_assignable_count(max_assignable_count)
+
+    if not property_id:
+        raise HTTPException(status_code=400, detail="property_id is required")
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    try:
+        res = (
+            supabase.table("properties")
+            .update(payload)
+            .eq("id", property_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_property failed: property_id={property_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="property update failed")
+
+    return {"ok": True, "property_id": property_id, "updated": payload, "data": res.data}
