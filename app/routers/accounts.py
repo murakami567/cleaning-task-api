@@ -39,6 +39,9 @@ def upsert_staff(
     available_property_ids: list[str] | None = Body(None),
     unchecked_property_ids: list[str] | None = Body(None),
     lineworks_channel_id: str | None = Body(None),
+    daily_capacity_point: int | None = Body(None),
+    solo_enabled: bool | None = Body(None),
+    shared_enabled: bool | None = Body(None),
 ):
     # チェック解除済み物件が最上位。
     # 同じ物件が両方に入った場合は、チェック解除済みを優先して通常対応から除外する。
@@ -61,6 +64,12 @@ def upsert_staff(
         "unchecked_property_ids": priority_ids,
     }
 
+    if daily_capacity_point is not None:
+        payload["daily_capacity_point"] = max(0, int(daily_capacity_point))
+    if solo_enabled is not None:
+        payload["solo_enabled"] = solo_enabled
+    if shared_enabled is not None:
+        payload["shared_enabled"] = shared_enabled
     if password is not None:
         payload["password"] = password
     if area is not None:
