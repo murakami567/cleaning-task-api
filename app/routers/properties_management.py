@@ -19,6 +19,14 @@ def _normalize_max_assignable_count(value) -> int | None:
     return n
 
 
+def _normalize_assignment_mode(value: str | None) -> str:
+    if value in [None, ""]:
+        return "solo"
+    if value not in ["solo", "shared"]:
+        raise HTTPException(status_code=400, detail="assignment_mode must be solo or shared")
+    return value
+
+
 @router.post("/properties/create")
 def create_property(
     property_code: str = Body(...),
@@ -27,6 +35,7 @@ def create_property(
     sort_order: int | None = Body(999),
     is_active: bool = Body(True),
     max_assignable_count: int | None = Body(None),
+    assignment_mode: str | None = Body("solo"),
 ):
     payload = {
         "property_code": property_code.strip(),
@@ -35,6 +44,7 @@ def create_property(
         "sort_order": sort_order if sort_order is not None else 999,
         "is_active": is_active,
         "max_assignable_count": _normalize_max_assignable_count(max_assignable_count),
+        "assignment_mode": _normalize_assignment_mode(assignment_mode),
     }
 
     if not payload["property_code"]:
@@ -62,6 +72,7 @@ def update_property(
     sort_order: int | None = Body(None),
     is_active: bool | None = Body(None),
     max_assignable_count: int | None = Body(None),
+    assignment_mode: str | None = Body(None),
 ):
     payload = {}
 
@@ -77,6 +88,8 @@ def update_property(
         payload["is_active"] = is_active
     if max_assignable_count is not None:
         payload["max_assignable_count"] = _normalize_max_assignable_count(max_assignable_count)
+    if assignment_mode is not None:
+        payload["assignment_mode"] = _normalize_assignment_mode(assignment_mode)
 
     if not property_id:
         raise HTTPException(status_code=400, detail="property_id is required")
