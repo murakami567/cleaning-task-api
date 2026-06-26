@@ -7,6 +7,9 @@ router = APIRouter(tags=["properties"])
 logger = get_logger(__name__)
 
 
+ASSIGNMENT_MODES = ["solo", "shared", "both"]
+
+
 def _normalize_max_assignable_count(value) -> int | None:
     if value is None or value == "":
         return None
@@ -22,8 +25,8 @@ def _normalize_max_assignable_count(value) -> int | None:
 def _normalize_assignment_mode(value: str | None) -> str:
     if value in [None, ""]:
         return "solo"
-    if value not in ["solo", "shared"]:
-        raise HTTPException(status_code=400, detail="assignment_mode must be solo or shared")
+    if value not in ASSIGNMENT_MODES:
+        raise HTTPException(status_code=400, detail="assignment_mode must be solo, shared or both")
     return value
 
 
