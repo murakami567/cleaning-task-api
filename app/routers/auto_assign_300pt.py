@@ -13,7 +13,7 @@ router = APIRouter(prefix="/auto-assign", tags=["auto-assign"])
 logger = get_logger(__name__)
 
 MAX_PROPERTIES_PER_STAFF = 2
-DEFAULT_ROOM_SCORE = 60
+DEFAULT_PROPERTY_POINT = 60
 DEFAULT_DAILY_CAPACITY = 300
 FALLBACK_PRIORITY_UNCHECKED = 100
 FALLBACK_PRIORITY_AVAILABLE = 1000
@@ -96,20 +96,6 @@ def _fetch_properties():
     return id_by_name, name_by_id, limit_by_id, mode_by_id
 
 
-def _fetch_room_scores():
-    try:
-        res = supabase.table("rooms").select("room_key, cleaning_score").execute()
-    except Exception as e:
-        logger.warning(f"rooms.cleaning_score unavailable, fallback score used: {e}")
-        return {}
-    scores = {}
-    for row in res.data or []:
-        key = str(row.get("room_key") or "")
-        if key:
-            scores[key] = _int_or_default(row.get("cleaning_score"), DEFAULT_ROOM_SCORE)
-    return scores
-
-
 def _task_score(task: dict[str, Any], room_scores: dict[str, int]) -> int:
     room_key = str(task.get("room_key") or "")
     if room_key and room_key in room_scores:
@@ -117,19 +103,39 @@ def _task_score(task: dict[str, Any], room_scores: dict[str, int]) -> int:
     return _int_or_default(task.get("load_score"), DEFAULT_ROOM_SCORE)
 
 
-def _fetch_priorities() -> dict[str, dict[str, int]]:
-    try:
-        res = supabase.table("staff_property_priorities").select("staff_id, property_id, priority_order").execute()
-    except Exception as e:
-        logger.warning(f"staff_property_priorities unavailable: {e}")
-        return {}
-    m: dict[str, dict[str, int]] = defaultdict(dict)
+def _fetch_properties():
+    res = (
+        supabase.table("properties")
+        .select("id, property_name, max_assignable_count, assignment_mode, cleaning_point")
+        .execute()
+    )
+
+    id_by_name = {}
+    name_by_id = {}
+    limit_by_id = {}
+    mode_by_id = {}
+    point_by_id = {}
+
     for row in res.data or []:
-        sid = str(row.get("staff_id") or "")
-        pid = str(row.get("property_id") or "")
-        if sid and pid:
-            m[sid][pid] = _int_or_default(row.get("priority_order"), 999)
-    return m
+        pid = str(row.get("id") or "")
+        name = str(row.get("property_name") or "")
+
+        if not pid or not name:
+            continue
+
+        id_by_name[name] = pid
+        name_by_id[pid] = name
+        limit_by_id[pid] = _limit(row.get("max_assignable_count"))
+
+        mode = str(row.get("assignment_mode") or "solo")
+        mode_by_id[pid] = mode if mode in ["solo", "shared", "both"] else "solo"
+
+        point_by_id[pid] = _int_or_default(
+            row.get("cleaning_point"),
+            DEFAULT_PROPERTY_POINT,
+        )
+
+    return id_by_name, name_by_id, limit_by_id, mode_by_id, point_by_id
 
 
 def _fetch_staffs(target_date: str) -> list[dict[str, Any]]:
@@ -275,8 +281,7 @@ def _apply_assignment(task, assignees, dry_run: bool):
 
 
 def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
-    id_by_name, name_by_id, limit_by_id, mode_by_id = _fetch_properties()
-    room_scores = _fetch_room_scores()
+    id_by_name, name_by_id, limit_by_id, mode_by_id, point_by_id = _fetch_properties()
     priority_map = _fetch_priorities()
     ng_pairs = _fetch_ng_pairs()
     staffs = _fetch_staffs(target_date)
@@ -293,41 +298,67 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
         if pid:
             property_tasks[pid].append(task)
         else:
-            skipped.append({"task_id": task.get("id"), "reason": "property_not_found", "property_name": task.get("property_name")})
+            skipped.append({
+                "task_id": task.get("id"),
+                "reason": "property_not_found",
+                "property_name": task.get("property_name"),
+            })
 
     used_points: dict[str, int] = defaultdict(int)
     props_by_staff: dict[str, set[str]] = defaultdict(set)
     count_by_staff_property: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
+    # 既存割当分も当日の使用pt・物件数・物件別件数に含める
     for task in tasks:
         pid = id_by_name.get(str(task.get("property_name") or ""))
-        score = _task_score(task, room_scores)
+        if not pid:
+            continue
+
+        score = point_by_id.get(pid, DEFAULT_PROPERTY_POINT)
+
         ids = task.get("assigned_staff_ids") or []
         if not isinstance(ids, list):
             ids = [ids]
-        share = math.ceil(score / max(1, len([x for x in ids if x]))) if ids else score
-        for sid in ids:
+
+        active_ids = [x for x in ids if x]
+        share = math.ceil(score / max(1, len(active_ids)))
+
+        for sid in active_ids:
             sid = str(sid)
-            if sid in staff_by_id and pid:
+            if sid in staff_by_id:
                 props_by_staff[sid].add(pid)
                 count_by_staff_property[sid][pid] += 1
                 used_points[sid] += share
 
     summaries = {}
-    ordered_pids = sorted(property_tasks.keys(), key=lambda p: (-len(property_tasks[p]), name_by_id.get(p, "")))
+    ordered_pids = sorted(
+        property_tasks.keys(),
+        key=lambda p: (-len(property_tasks[p]), name_by_id.get(p, "")),
+    )
 
     for pid in ordered_pids:
         rows = sorted(property_tasks[pid], key=lambda t: str(t.get("room_name") or ""))
         limit = limit_by_id.get(pid)
         mode = mode_by_id.get(pid, "solo")
-        total_score = sum(_task_score(t, room_scores) for t in rows)
-        required_staff = max(1, math.ceil(len(rows) / limit)) if limit else 1
+        property_point = point_by_id.get(pid, DEFAULT_PROPERTY_POINT)
+
+        total_score = property_point * len(rows)
+
+        required_staff_by_count = math.ceil(len(rows) / limit) if limit else 1
+        required_staff_by_point = math.ceil(total_score / DEFAULT_DAILY_CAPACITY)
+
+        required_staff = max(
+            required_staff_by_count,
+            required_staff_by_point,
+            1,
+        )
 
         summaries[pid] = {
             "property_id": pid,
             "property_name": name_by_id.get(pid) or rows[0].get("property_name"),
             "assignment_mode": mode,
             "task_count": len(rows),
+            "cleaning_point": property_point,
             "total_score": total_score,
             "max_assignable_count": limit,
             "required_staff_count": required_staff,
@@ -338,57 +369,127 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
         }
 
         for task in rows:
-            score = _task_score(task, room_scores)
+            score = property_point
             chosen = []
             actual_mode = mode
 
             if mode in ["solo", "both"]:
-                candidates = _base_candidates(staffs, pid, priority_map, props_by_staff, ng_pairs, "solo")
-                candidates = [c for c in candidates if _can_take(str(c[1].get("id")), pid, score, c[1], used_points, count_by_staff_property, limit)]
-                candidates.sort(key=lambda c: _sort_candidate_key(c, count_by_staff_property, used_points, props_by_staff))
+                candidates = _base_candidates(
+                    staffs,
+                    pid,
+                    priority_map,
+                    props_by_staff,
+                    ng_pairs,
+                    "solo",
+                )
+
+                candidates = [
+                    c
+                    for c in candidates
+                    if _can_take(
+                        str(c[1].get("id")),
+                        pid,
+                        score,
+                        c[1],
+                        used_points,
+                        count_by_staff_property,
+                        limit,
+                    )
+                ]
+
+                candidates.sort(
+                    key=lambda c: _sort_candidate_key(
+                        c,
+                        count_by_staff_property,
+                        used_points,
+                        props_by_staff,
+                    )
+                )
+
                 if candidates:
                     chosen = [candidates[0][1]]
                     actual_mode = "solo"
 
             if not chosen and mode in ["shared", "both"]:
-                candidates = _base_candidates(staffs, pid, priority_map, props_by_staff, ng_pairs, "shared")
-                candidates.sort(key=lambda c: _sort_candidate_key(c, count_by_staff_property, used_points, props_by_staff))
+                candidates = _base_candidates(
+                    staffs,
+                    pid,
+                    priority_map,
+                    props_by_staff,
+                    ng_pairs,
+                    "shared",
+                )
+
+                candidates.sort(
+                    key=lambda c: _sort_candidate_key(
+                        c,
+                        count_by_staff_property,
+                        used_points,
+                        props_by_staff,
+                    )
+                )
+
                 team_size = max(2, min(required_staff, len(candidates)))
                 team = []
+
                 for _, staff in candidates:
                     sid = str(staff.get("id"))
                     tentative_share = math.ceil(score / max(1, team_size))
-                    if _can_take(sid, pid, tentative_share, staff, used_points, count_by_staff_property, limit):
+
+                    if _can_take(
+                        sid,
+                        pid,
+                        tentative_share,
+                        staff,
+                        used_points,
+                        count_by_staff_property,
+                        limit,
+                    ):
                         team.append(staff)
+
                     if len(team) >= team_size:
                         break
+
                 if len(team) >= 2:
                     chosen = team
                     actual_mode = "shared"
 
             if not chosen:
                 summaries[pid]["skipped_count"] += 1
-                skipped.append({"task_id": task.get("id"), "property_name": summaries[pid]["property_name"], "room_name": task.get("room_name"), "score": score, "reason": "no_candidate_or_capacity"})
+                skipped.append({
+                    "task_id": task.get("id"),
+                    "property_name": summaries[pid]["property_name"],
+                    "room_name": task.get("room_name"),
+                    "score": score,
+                    "cleaning_point": property_point,
+                    "reason": "no_candidate_or_capacity",
+                })
                 continue
 
             _apply_assignment(task, chosen, dry_run)
+
             share_points = math.ceil(score / len(chosen))
+
             for staff in chosen:
                 sid = str(staff.get("id"))
                 name = str(staff.get("staff_name") or "")
+
                 props_by_staff[sid].add(pid)
                 count_by_staff_property[sid][pid] += 1
                 used_points[sid] += share_points
+
                 if sid not in summaries[pid]["assigned_staff_ids"]:
                     summaries[pid]["assigned_staff_ids"].append(sid)
                     summaries[pid]["assigned_staff_names"].append(name)
 
             summaries[pid]["assigned_count"] += 1
+
             assigned.append({
                 "task_id": task.get("id"),
                 "property_name": summaries[pid]["property_name"],
                 "room_name": task.get("room_name"),
                 "score": score,
+                "cleaning_point": property_point,
                 "assignment_mode": actual_mode,
                 "staff_ids": [str(s.get("id")) for s in chosen],
                 "staff_names": [str(s.get("staff_name") or "") for s in chosen],
@@ -396,17 +497,23 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
             })
 
     property_summaries = list(summaries.values())
+
     for row in property_summaries:
         row["used_staff_count"] = len(row["assigned_staff_ids"])
 
     staff_summaries = []
+
     for staff in staffs:
         sid = str(staff.get("id"))
+
         staff_summaries.append({
             "staff_id": sid,
             "staff_name": staff.get("staff_name"),
             "used_points": used_points[sid],
-            "daily_capacity_point": _int_or_default(staff.get("daily_capacity_point"), DEFAULT_DAILY_CAPACITY),
+            "daily_capacity_point": _int_or_default(
+                staff.get("daily_capacity_point"),
+                DEFAULT_DAILY_CAPACITY,
+            ),
             "property_count": len(props_by_staff[sid]),
         })
 
