@@ -19,7 +19,7 @@ from app.routers.lineworks import router as lineworks_router
 from app.routers.mate_carte import router as mate_carte_router
 from app.routers.backups import router as backups_router
 from app.routers.monthly_reports import router as monthly_reports_router
-from app.routers.auto_assign import router as auto_assign_router
+from app.routers.auto_assign_demand import router as auto_assign_router
 from app.routers.compat import router as compat_router
 from app.routers.properties_management import router as properties_management_router
 from app.routers import payroll
