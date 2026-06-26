@@ -30,6 +30,18 @@ def _normalize_assignment_mode(value: str | None) -> str:
     return value
 
 
+def _normalize_cleaning_point(value) -> int:
+    if value is None or value == "":
+        return 60
+    try:
+        n = int(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="cleaning_point must be a number")
+    if n <= 0:
+        raise HTTPException(status_code=400, detail="cleaning_point must be greater than 0")
+    return n
+
+
 @router.post("/properties/create")
 def create_property(
     property_code: str = Body(...),
@@ -39,6 +51,7 @@ def create_property(
     is_active: bool = Body(True),
     max_assignable_count: int | None = Body(None),
     assignment_mode: str | None = Body("solo"),
+    cleaning_point: int | None = Body(60),
 ):
     payload = {
         "property_code": property_code.strip(),
@@ -48,6 +61,7 @@ def create_property(
         "is_active": is_active,
         "max_assignable_count": _normalize_max_assignable_count(max_assignable_count),
         "assignment_mode": _normalize_assignment_mode(assignment_mode),
+        "cleaning_point": _normalize_cleaning_point(cleaning_point),
     }
 
     if not payload["property_code"]:
@@ -76,6 +90,7 @@ def update_property(
     is_active: bool | None = Body(None),
     max_assignable_count: int | None = Body(None),
     assignment_mode: str | None = Body(None),
+    cleaning_point: int | None = Body(None),
 ):
     payload = {}
 
@@ -93,6 +108,8 @@ def update_property(
         payload["max_assignable_count"] = _normalize_max_assignable_count(max_assignable_count)
     if assignment_mode is not None:
         payload["assignment_mode"] = _normalize_assignment_mode(assignment_mode)
+    if cleaning_point is not None:
+        payload["cleaning_point"] = _normalize_cleaning_point(cleaning_point)
 
     if not property_id:
         raise HTTPException(status_code=400, detail="property_id is required")
