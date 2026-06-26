@@ -66,17 +66,29 @@ def _task_load(task: dict[str, Any]) -> int:
     return score if score > 0 else 1
 
 
-def _fetch_properties() -> tuple[dict[str, str], dict[str, str]]:
-    res = supabase.table("properties").select("id, property_name").execute()
+def _normalize_property_limit(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        n = int(value)
+    except Exception:
+        return None
+    return n if n > 0 else None
+
+
+def _fetch_properties() -> tuple[dict[str, str], dict[str, str], dict[str, int | None]]:
+    res = supabase.table("properties").select("id, property_name, max_assignable_count").execute()
     by_name: dict[str, str] = {}
     name_by_id: dict[str, str] = {}
+    max_by_id: dict[str, int | None] = {}
     for row in res.data or []:
         pid = str(row.get("id") or "")
         name = str(row.get("property_name") or "")
         if pid and name:
             by_name[name] = pid
             name_by_id[pid] = name
-    return by_name, name_by_id
+            max_by_id[pid] = _normalize_property_limit(row.get("max_assignable_count"))
+    return by_name, name_by_id, max_by_id
 
 
 def _fetch_shift_staff(target_date: str) -> list[dict[str, Any]]:
@@ -164,7 +176,7 @@ def _eligible_staff(staffs: list[dict[str, Any]], property_id: str) -> list[tupl
 
 
 def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
-    property_id_by_name, _ = _fetch_properties()
+    property_id_by_name, _, property_max_by_id = _fetch_properties()
     ng_pairs = _fetch_ng_pairs()
     staffs = _fetch_shift_staff(target_date)
     tasks = _fetch_tasks(target_date)
@@ -175,10 +187,11 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
 
     load_by_staff: dict[str, int] = defaultdict(int)
     properties_by_staff: dict[str, set[str]] = defaultdict(set)
+    property_task_count_by_staff: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     assigned: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
 
-    # 既存割当を負荷・物件数に含める。ロック済みや手動割当を自動割当が壊さないため。
+    # 既存割当を負荷・物件数・物件別件数に含める。ロック済みや手動割当を自動割当が壊さないため。
     staff_by_id = {str(s.get("id")): s for s in staffs if s.get("id")}
     for task in tasks:
         ids = task.get("assigned_staff_ids") or []
@@ -191,6 +204,7 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
                 load_by_staff[sid] += _task_load(task)
                 if property_id:
                     properties_by_staff[sid].add(property_id)
+                    property_task_count_by_staff[sid][property_id] += 1
 
     for task in unlocked_unassigned:
         property_name = str(task.get("property_name") or "")
@@ -199,6 +213,7 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
             skipped.append({"task_id": task.get("id"), "property_name": property_name, "reason": "property_not_found"})
             continue
 
+        property_limit = property_max_by_id.get(property_id)
         candidates = []
         for priority, staff in _eligible_staff(staffs, property_id):
             sid = str(staff.get("id"))
@@ -207,18 +222,26 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
                 continue
             if _has_ng(current_props, property_id, ng_pairs):
                 continue
-            candidates.append((priority, load_by_staff[sid], len(current_props), str(staff.get("sort_order") or 999), staff))
+            if property_limit is not None and property_task_count_by_staff[sid][property_id] >= property_limit:
+                continue
+            candidates.append((priority, load_by_staff[sid], property_task_count_by_staff[sid][property_id], len(current_props), str(staff.get("sort_order") or 999), staff))
 
         if not candidates:
-            skipped.append({"task_id": task.get("id"), "property_name": property_name, "reason": "no_eligible_staff"})
+            skipped.append({
+                "task_id": task.get("id"),
+                "property_name": property_name,
+                "reason": "no_eligible_staff_or_property_limit",
+                "property_max_assignable_count": property_limit,
+            })
             continue
 
-        candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3], str(x[4].get("staff_name") or "")))
-        _, _, _, _, selected = candidates[0]
+        candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], str(x[5].get("staff_name") or "")))
+        _, _, _, _, _, selected = candidates[0]
         sid = str(selected.get("id"))
         sname = str(selected.get("staff_name") or "")
         load_by_staff[sid] += _task_load(task)
         properties_by_staff[sid].add(property_id)
+        property_task_count_by_staff[sid][property_id] += 1
 
         payload = {
             "assigned_staff_ids": [sid],
@@ -235,6 +258,8 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
             "room_name": task.get("room_name"),
             "staff_id": sid,
             "staff_name": sname,
+            "property_max_assignable_count": property_limit,
+            "staff_property_assigned_count": property_task_count_by_staff[sid][property_id],
             "priority": "unchecked" if property_id in [str(x) for x in (selected.get("unchecked_property_ids") or [])] else "available",
         })
 
