@@ -22,6 +22,7 @@ from app.routers.monthly_reports import router as monthly_reports_router
 from app.routers.auto_assign_300pt import router as auto_assign_router
 from app.routers.compat import router as compat_router
 from app.routers.properties_management import router as properties_management_router
+from app.routers.rooms_management import router as rooms_management_router
 from app.routers import payroll
 
 logger = get_logger(__name__)
@@ -72,6 +73,7 @@ app.include_router(monthly_reports_router)
 app.include_router(auto_assign_router)
 app.include_router(compat_router)
 app.include_router(properties_management_router)
+app.include_router(rooms_management_router)
 app.include_router(payroll.router)
 
 logger.info("cleaning-task-api started")
