@@ -37,11 +37,14 @@ def _fetch_all_cleaning_tasks_for_count() -> list[dict[str, Any]]:
     page_size = 1000
     start = 0
 
+    # load_score が存在しない環境でも落ちないよう、まず最小カラムで取得する。
+    select_cols = "id, task_date, checkout_date, status"
+
     while True:
         end = start + page_size - 1
         res = (
             supabase.table("cleaning_tasks")
-            .select("id, task_date, checkout_date, status, load_score")
+            .select(select_cols)
             .order("task_date")
             .range(start, end)
             .execute()
@@ -117,11 +120,7 @@ def get_or_create_shift_day(shift_date: str = Body(...), note: str = Body("")):
         if existing.data:
             return existing.data[0]
 
-        res = (
-            supabase.table("shift_days")
-            .insert({"shift_date": shift_date, "note": note})
-            .execute()
-        )
+        res = supabase.table("shift_days").insert({"shift_date": shift_date, "note": note}).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="shift day creation failed")
         return res.data[0]
@@ -161,20 +160,12 @@ def upsert_shift_entry(
             "note": note or "",
         }
         if existing.data:
-            res = (
-                supabase.table("shift_entries")
-                .update(payload)
-                .eq("id", existing.data[0].get("id"))
-                .execute()
-            )
+            res = supabase.table("shift_entries").update(payload).eq("id", existing.data[0].get("id")).execute()
         else:
             res = supabase.table("shift_entries").insert(payload).execute()
         return {"ok": True, "data": _safe_data(res)}
     except Exception as e:
-        logger.error(
-            f"compat upsert_shift_entry failed: shift_day_id={shift_day_id} staff_id={staff_id} {e}",
-            exc_info=True,
-        )
+        logger.error(f"compat upsert_shift_entry failed: shift_day_id={shift_day_id} staff_id={staff_id} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="shift entry upsert failed")
 
 
@@ -227,8 +218,6 @@ def get_shift_board(year: int, month: int):
             .execute()
         )
 
-        # DB側の日付比較に頼らず、タスク管理と同じ task_date をPython側で月内判定する。
-        # これにより task_date の型・形式差分で0件になる事故を避ける。
         task_rows = _fetch_all_cleaning_tasks_for_count()
 
         cleaning_counts: dict[str, int] = {}
@@ -240,16 +229,13 @@ def get_shift_board(year: int, month: int):
             if status in excluded_statuses:
                 continue
 
-            d = _date_key(row.get("task_date"))
+            d = _date_key(row.get("task_date") or row.get("checkout_date"))
             if not d or d < start_iso or d >= end_iso:
                 continue
 
             cleaning_counts[d] = cleaning_counts.get(d, 0) + 1
-            try:
-                score = int(row.get("load_score") or 0)
-            except Exception:
-                score = 0
-            workload_score[d] = workload_score.get(d, 0) + score
+            # 物件点数移行後は cleaning_tasks 側に load_score が無い可能性があるため、ここでは0にする。
+            workload_score[d] = workload_score.get(d, 0) + int(row.get("load_score") or 0)
 
         attendance_counts: dict[str, int] = {}
         for day in shift_res.data or []:
@@ -271,10 +257,7 @@ def get_shift_board(year: int, month: int):
             "attendance_counts": attendance_counts,
             "workload": workload,
             "workload_score": workload_score,
-            "debug": {
-                "all_task_rows": len(task_rows),
-                "counted_days": cleaning_counts,
-            },
+            "debug": {"all_task_rows": len(task_rows), "counted_days": cleaning_counts},
         }
     except Exception as e:
         logger.error(f"compat get_shift_board failed: year={year} month={month} {e}", exc_info=True)
