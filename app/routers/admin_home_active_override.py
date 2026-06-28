@@ -6,8 +6,10 @@ from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_or_leader
 from app.routers.admin_portal import _get_today_attendance_map, _enrich_shift_with_attendance
+from app.routers.admin_report_inner import router as admin_report_inner_router
 
 router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal"])
+router.include_router(admin_report_inner_router)
 logger = get_logger(__name__)
 
 
