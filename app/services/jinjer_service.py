@@ -62,13 +62,19 @@ def _authorized_get(path: str, params: dict[str, Any], timeout: int = 60) -> req
     token = _get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{JINJER_BASE_URL}{path if path.startswith('/') else '/' + path}"
+
+    logger.info(f"jinjer request start: url={url} params={params}")
     res = requests.get(url, params=params, headers=headers, timeout=timeout)
+    logger.info(f"jinjer request result: request_url={res.request.url} status={res.status_code} body={res.text[:500]}")
+
     if res.status_code == 401:
         _token_cache["token"] = ""
         _token_cache["expires_at"] = 0.0
         token = _get_access_token()
         headers["Authorization"] = f"Bearer {token}"
+        logger.info(f"jinjer request retry after 401: url={url} params={params}")
         res = requests.get(url, params=params, headers=headers, timeout=timeout)
+        logger.info(f"jinjer request retry result: request_url={res.request.url} status={res.status_code} body={res.text[:500]}")
     return res
 
 
