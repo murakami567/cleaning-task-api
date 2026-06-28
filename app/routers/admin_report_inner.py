@@ -1,0 +1,98 @@
+from datetime import date
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.db import supabase
+from app.logger import get_logger
+from app.services.auth_service import require_admin_or_leader
+
+router = APIRouter()
+logger = get_logger(__name__)
+
+
+def _minutes_between(start_time: str, end_time: str, break_minutes: int) -> int:
+    try:
+        sh, sm = [int(x) for x in start_time.split(":")[:2]]
+        eh, em = [int(x) for x in end_time.split(":")[:2]]
+    except Exception:
+        return 0
+    return max((eh * 60 + em) - (sh * 60 + sm) - int(break_minutes or 0), 0)
+
+
+def _staff_map(ids: list[str]) -> dict[str, dict]:
+    clean_ids = [x for x in dict.fromkeys(ids) if x]
+    if not clean_ids:
+        return {}
+    try:
+        res = supabase.table("staff_members").select("id, staff_name, staff_code").in_("id", clean_ids).execute()
+    except Exception as e:
+        logger.warning(f"staff lookup skipped: {e}")
+        return {}
+    return {str(row.get("id")): row for row in (res.data or [])}
+
+
+@router.get("/worklogs/today")
+def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"), current_user: dict = Depends(require_admin_or_leader)):
+    work_date = date_param or date.today().isoformat()
+    try:
+        res = supabase.table("work_logs").select("*").eq("work_date", work_date).order("created_at", desc=True).execute()
+    except Exception as e:
+        logger.error(f"get_admin_worklogs failed: date={work_date} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="実働報告の取得に失敗しました。")
+
+    rows = res.data or []
+    staff_by_id = _staff_map([str(row.get("user_id") or "") for row in rows])
+    worklogs = []
+    for row in rows:
+        sid = str(row.get("user_id") or "")
+        staff = staff_by_id.get(sid, {})
+        break_minutes = int(row.get("break_minutes") or 0)
+        work_minutes = row.get("work_minutes")
+        if work_minutes is None:
+            work_minutes = _minutes_between(row.get("start_time") or "", row.get("end_time") or "", break_minutes)
+        worklogs.append({
+            "id": row.get("id"),
+            "user_id": sid,
+            "staff_name": row.get("staff_name") or staff.get("staff_name") or "",
+            "staff_code": row.get("staff_code") or staff.get("staff_code") or "",
+            "work_date": row.get("work_date") or work_date,
+            "property_name": row.get("property_name") or "",
+            "room_name": row.get("room_name") or "",
+            "work_start_time": row.get("work_start_time") or row.get("start_time") or "",
+            "start_time": row.get("start_time") or "",
+            "end_time": row.get("end_time") or "",
+            "break_minutes": break_minutes,
+            "work_type": row.get("work_type") or "",
+            "note": row.get("note") or "",
+            "created_at": row.get("created_at") or "",
+            "work_minutes": int(work_minutes or 0),
+        })
+    return {"worklogs": worklogs}
+
+
+@router.get("/lost-items")
+def get_admin_lost_items(current_user: dict = Depends(require_admin_or_leader)):
+    try:
+        res = supabase.table("lost_items").select("*").order("created_at", desc=True).execute()
+    except Exception as e:
+        logger.error(f"get_admin_lost_items failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="忘れ物一覧の取得に失敗しました。")
+
+    rows = res.data or []
+    staff_by_id = _staff_map([str(row.get("reported_by") or "") for row in rows])
+    items = []
+    for row in rows:
+        reporter_id = str(row.get("reported_by") or "")
+        staff = staff_by_id.get(reporter_id, {})
+        items.append({
+            "id": row.get("id"),
+            "task_id": row.get("task_id"),
+            "task_date": row.get("task_date") or "",
+            "property_name": row.get("property_name") or "",
+            "room_name": row.get("room_name") or "",
+            "item_description": row.get("item_description") or "",
+            "photo_url": row.get("photo_url") or "",
+            "reported_by": reporter_id,
+            "reported_by_name": row.get("reported_by_name") or staff.get("staff_name") or "",
+            "created_at": row.get("created_at") or "",
+        })
+    return {"items": items}
