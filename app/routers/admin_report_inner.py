@@ -30,20 +30,39 @@ def _staff_map_by_id(ids: list[str]) -> dict[str, dict]:
     return {str(row.get("id")): row for row in (res.data or [])}
 
 
+def _fetch_worklog_rows(work_date: str) -> list[dict]:
+    last_error = None
+    for table_name in ["worklogs", "work_logs"]:
+        try:
+            res = (
+                supabase.table(table_name)
+                .select("*")
+                .eq("work_date", work_date)
+                .execute()
+            )
+            rows = res.data or []
+            rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+            return rows
+        except Exception as e:
+            last_error = e
+            logger.warning(f"worklog lookup skipped: table={table_name} error={e}")
+            continue
+    raise last_error or RuntimeError("worklog lookup failed")
+
+
 @router.get("/worklogs/today")
 def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"), current_user: dict = Depends(require_admin_or_leader)):
     work_date = date_param or date.today().isoformat()
     try:
-        res = supabase.table("worklogs").select("*").eq("work_date", work_date).order("created_at", desc=True).execute()
+        rows = _fetch_worklog_rows(work_date)
     except Exception as e:
         logger.error(f"get_admin_worklogs failed: date={work_date} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="実働報告の取得に失敗しました。")
 
-    rows = res.data or []
-    staff_by_id = _staff_map_by_id([str(row.get("user_id") or "") for row in rows])
+    staff_by_id = _staff_map_by_id([str(row.get("user_id") or row.get("staff_id") or "") for row in rows])
     worklogs = []
     for row in rows:
-        sid = str(row.get("user_id") or "")
+        sid = str(row.get("user_id") or row.get("staff_id") or "")
         staff = staff_by_id.get(sid, {})
         break_minutes = int(row.get("break_minutes") or 0)
         work_minutes = row.get("work_minutes")
@@ -72,25 +91,27 @@ def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"
 @router.get("/lost-items")
 def get_admin_lost_items(current_user: dict = Depends(require_admin_or_leader)):
     try:
-        res = supabase.table("lost_items").select("*").order("created_at", desc=True).execute()
+        res = supabase.table("lost_items").select("*").execute()
     except Exception as e:
         logger.error(f"get_admin_lost_items failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="忘れ物一覧の取得に失敗しました。")
 
+    rows = res.data or []
+    rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
     items = []
-    for row in res.data or []:
+    for row in rows:
         items.append({
             "id": row.get("id"),
-            "task_id": None,
-            "task_date": row.get("found_date") or "",
+            "task_id": row.get("task_id"),
+            "task_date": row.get("task_date") or row.get("found_date") or "",
             "property_name": row.get("property_name") or "",
             "room_name": row.get("room_name") or "",
-            "item_description": row.get("item_name") or "",
-            "photo_url": row.get("image_url") or "",
+            "item_description": row.get("item_description") or row.get("item_name") or "",
+            "photo_url": row.get("photo_url") or row.get("image_url") or "",
             "status": row.get("status") or "",
             "note": row.get("note") or "",
-            "reported_by": row.get("created_by_staff_code") or "",
-            "reported_by_name": row.get("created_by_staff_name") or "",
+            "reported_by": row.get("reported_by") or row.get("created_by_staff_code") or "",
+            "reported_by_name": row.get("reported_by_name") or row.get("created_by_staff_name") or "",
             "created_at": row.get("created_at") or "",
         })
     return {"items": items}
