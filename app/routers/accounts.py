@@ -43,8 +43,6 @@ def upsert_staff(
     solo_enabled: bool | None = Body(None),
     shared_enabled: bool | None = Body(None),
 ):
-    # チェック解除済み物件が最上位。
-    # 同じ物件が両方に入った場合は、チェック解除済みを優先して通常対応から除外する。
     priority_ids = list(dict.fromkeys(unchecked_property_ids or []))
     priority_set = set(priority_ids)
     normal_ids = [
@@ -96,3 +94,39 @@ def upsert_staff(
 
     logger.info(f"accounts upsert_staff: staff_id={res.data[0].get('id')}")
     return res.data[0]
+
+
+@router.get("/staff-property-priorities")
+def get_staff_property_priorities(staff_id: str | None = None):
+    try:
+        q = supabase.table("staff_property_priorities").select("*")
+        if staff_id:
+            q = q.eq("staff_id", staff_id)
+        res = q.order("staff_id").order("priority_order").execute()
+    except Exception as e:
+        logger.error(f"accounts get_staff_property_priorities failed: staff_id={staff_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="優先順位の取得に失敗しました。")
+    return res.data or []
+
+
+@router.post("/staff-property-priorities/upsert")
+def upsert_staff_property_priorities(
+    staff_id: str = Body(...),
+    property_ids: list[str] = Body(default=[]),
+):
+    property_ids = [pid for pid in dict.fromkeys(property_ids or []) if pid]
+    rows = [
+        {"staff_id": staff_id, "property_id": pid, "priority_order": idx + 1}
+        for idx, pid in enumerate(property_ids)
+    ]
+
+    try:
+        supabase.table("staff_property_priorities").delete().eq("staff_id", staff_id).execute()
+        if rows:
+            supabase.table("staff_property_priorities").insert(rows).execute()
+    except Exception as e:
+        logger.error(f"accounts upsert_staff_property_priorities failed: staff_id={staff_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="優先順位の保存に失敗しました。")
+
+    logger.info(f"accounts upsert_staff_property_priorities: staff_id={staff_id} count={len(rows)}")
+    return {"ok": True, "staff_id": staff_id, "count": len(rows), "items": rows}
