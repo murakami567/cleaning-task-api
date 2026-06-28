@@ -84,12 +84,20 @@ def _month_start_end(month: str) -> tuple[str, str]:
 def _work_schedule_param_candidates(month: str, page: int) -> list[dict[str, Any]]:
     start_date, end_date = _month_start_end(month)
     y, m = month.split("-")
+    compact = f"{y}{m}"
     return [
+        {"month": compact, "page": page},
+        {"month": compact},
         {"month": month, "page": page},
+        {"month": month},
         {"month": month.replace("-", "/"), "page": page},
+        {"year_month": compact, "page": page},
         {"year_month": month, "page": page},
+        {"yearMonth": compact, "page": page},
         {"yearMonth": month, "page": page},
+        {"target_month": compact, "page": page},
         {"target_month": month, "page": page},
+        {"targetMonth": compact, "page": page},
         {"targetMonth": month, "page": page},
         {"year": y, "month": m, "page": page},
         {"target_year": y, "target_month": m, "page": page},
@@ -97,7 +105,6 @@ def _work_schedule_param_candidates(month: str, page: int) -> list[dict[str, Any
         {"from": start_date, "to": end_date, "page": page},
         {"date_from": start_date, "date_to": end_date, "page": page},
         {"startDate": start_date, "endDate": end_date, "page": page},
-        {"month": month},
         {"start_date": start_date, "end_date": end_date},
     ]
 
