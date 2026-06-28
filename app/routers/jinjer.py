@@ -1,9 +1,11 @@
+import io
 import os
 import re
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException
+import pandas as pd
+from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, UploadFile
 
 from app.db import supabase
 from app.logger import get_logger
@@ -16,6 +18,22 @@ logger = get_logger(__name__)
 
 MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TIME_RANGE_PATTERN = re.compile(r"(\d{1,2}:\d{2})\s*[~〜\-－]\s*(\d{1,2}:\d{2})")
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).replace("\u3000", " ").strip()
+
+
+def _normalize_name(value: Any) -> str:
+    return re.sub(r"\s+", "", _normalize_text(value))
 
 
 def _normalize_time(t: str | None) -> str | None:
@@ -25,6 +43,8 @@ def _normalize_time(t: str | None) -> str | None:
     s = str(t).strip()
     if not s:
         return None
+    if re.match(r"^\d{1}:\d{2}$", s):
+        s = f"0{s}"
     return s[:5]
 
 
@@ -74,6 +94,30 @@ def _get_staff_maps() -> tuple[dict[str, dict], dict[str, dict]]:
         if code:
             code_to_staff[str(code).strip()] = row
     return code_to_staff, id_to_staff
+
+
+def _get_staff_name_map() -> dict[str, dict]:
+    try:
+        staff_res = (
+            supabase.table("staff_members")
+            .select("id, staff_name, staff_code")
+            .eq("is_active", True)
+            .limit(10000)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"jinjer staff name lookup failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="スタッフ取得に失敗しました。")
+
+    out: dict[str, dict] = {}
+    for row in staff_res.data or []:
+        name_key = _normalize_name(row.get("staff_name"))
+        if name_key:
+            out[name_key] = row
+        code_key = _normalize_name(row.get("staff_code"))
+        if code_key:
+            out[code_key] = row
+    return out
 
 
 def _sync_attendances_for_range(start: str, end: str) -> dict:
@@ -155,6 +199,212 @@ def _verify_cron_key(x_cron_key: str | None) -> None:
         raise HTTPException(status_code=500, detail="CRON_SECRET が設定されていません。")
     if not x_cron_key or x_cron_key != expected:
         raise HTTPException(status_code=401, detail="Invalid cron key")
+
+
+def _infer_month_from_excel(sheet_name: str | None, df: pd.DataFrame) -> str | None:
+    if sheet_name and MONTH_PATTERN.match(str(sheet_name)):
+        return str(sheet_name)
+    first_cell = _normalize_text(df.iat[0, 0]) if not df.empty else ""
+    m = re.search(r"(\d{1,2})\s*月", first_cell)
+    if m:
+        current_year = date.today().year
+        return f"{current_year}-{int(m.group(1)):02d}"
+    return None
+
+
+def _find_date_row(df: pd.DataFrame) -> int:
+    best_idx = -1
+    best_count = 0
+    for idx in range(min(8, len(df))):
+        count = 0
+        for value in df.iloc[idx].tolist()[1:]:
+            text = _normalize_text(value)
+            if re.fullmatch(r"\d{1,2}(\.0)?", text):
+                n = int(float(text))
+                if 1 <= n <= 31:
+                    count += 1
+        if count > best_count:
+            best_idx = idx
+            best_count = count
+    if best_idx < 0 or best_count < 5:
+        raise HTTPException(status_code=400, detail="日付行を検出できませんでした。")
+    return best_idx
+
+
+def _parse_shift_cell(value: Any) -> tuple[str | None, str | None, str | None, str]:
+    raw = _normalize_text(value)
+    if not raw:
+        return None, None, None, raw
+
+    compact = raw.replace(" ", "")
+    if "休" in compact:
+        return "休み", None, None, raw
+
+    match = TIME_RANGE_PATTERN.search(raw)
+    if match:
+        return "出勤", _normalize_time(match.group(1)), _normalize_time(match.group(2)), raw
+
+    if compact in ["出勤", "勤務"]:
+        return "出勤", None, None, raw
+
+    return None, None, None, raw
+
+
+def _parse_shift_file_to_items(file_name: str, content: bytes, month: str | None) -> tuple[str, list[dict[str, Any]]]:
+    lower = file_name.lower()
+    sheet_name: str | None = None
+
+    if lower.endswith(".csv"):
+        try:
+            df = pd.read_csv(io.BytesIO(content), header=None, dtype=object, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            df = pd.read_csv(io.BytesIO(content), header=None, dtype=object, encoding="cp932")
+    elif lower.endswith(".xlsx") or lower.endswith(".xls"):
+        excel = pd.ExcelFile(io.BytesIO(content))
+        sheet_name = str(excel.sheet_names[0])
+        df = pd.read_excel(excel, sheet_name=sheet_name, header=None, dtype=object)
+    else:
+        raise HTTPException(status_code=400, detail="CSV または Excel ファイルをアップロードしてください。")
+
+    target_month = month or _infer_month_from_excel(sheet_name, df)
+    if not target_month or not MONTH_PATTERN.match(target_month):
+        raise HTTPException(status_code=400, detail="month は YYYY-MM 形式で指定してください。")
+
+    date_row = _find_date_row(df)
+    date_cols: list[tuple[int, str]] = []
+    for col in range(1, df.shape[1]):
+        text = _normalize_text(df.iat[date_row, col])
+        if not re.fullmatch(r"\d{1,2}(\.0)?", text):
+            continue
+        day = int(float(text))
+        if 1 <= day <= 31:
+            date_cols.append((col, f"{target_month}-{day:02d}"))
+
+    items: list[dict[str, Any]] = []
+    for row_idx in range(date_row + 2, df.shape[0]):
+        staff_name = _normalize_text(df.iat[row_idx, 0])
+        if not staff_name or staff_name in ["計", "合計"]:
+            continue
+        for col, shift_date in date_cols:
+            status, start, end, raw = _parse_shift_cell(df.iat[row_idx, col])
+            if not status:
+                continue
+            items.append({
+                "employee_id": staff_name,
+                "staff_name": staff_name,
+                "date": shift_date,
+                "start": start,
+                "end": end,
+                "status": status,
+                "raw": raw,
+            })
+    return target_month, items
+
+
+def _save_shift_items(items: list[dict[str, Any]], source: str) -> dict[str, Any]:
+    name_to_staff = _get_staff_name_map()
+
+    needed_dates: set[str] = set()
+    matched_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    skipped_no_staff: list[str] = []
+    seen_no_staff: set[str] = set()
+
+    for it in items:
+        employee_id = _normalize_text(it.get("employee_id"))
+        staff = name_to_staff.get(_normalize_name(employee_id))
+        if not staff:
+            if employee_id and employee_id not in seen_no_staff:
+                seen_no_staff.add(employee_id)
+                skipped_no_staff.append(employee_id)
+            continue
+        if it.get("date"):
+            needed_dates.add(it["date"])
+            matched_items.append((it, staff))
+
+    try:
+        day_res = (
+            supabase.table("shift_days")
+            .select("id, shift_date")
+            .in_("shift_date", list(needed_dates))
+            .execute()
+        ) if needed_dates else None
+    except Exception as e:
+        logger.error(f"shift upload shift_days lookup failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="shift_days 取得に失敗しました。")
+
+    date_to_day_id: dict[str, str] = {}
+    for row in (day_res.data if day_res else []) or []:
+        date_to_day_id[row["shift_date"]] = row["id"]
+
+    for d in sorted(needed_dates):
+        if d in date_to_day_id:
+            continue
+        try:
+            created = supabase.table("shift_days").insert({"shift_date": d, "note": ""}).execute()
+            if created.data:
+                date_to_day_id[d] = created.data[0]["id"]
+        except Exception as e:
+            logger.error(f"shift upload shift_day create failed: date={d} {e}", exc_info=True)
+
+    try:
+        ent_res = (
+            supabase.table("shift_entries")
+            .select("id, shift_day_id, staff_id, assigned_area, note, status")
+            .in_("shift_day_id", list(date_to_day_id.values()))
+            .limit(50000)
+            .execute()
+        ) if date_to_day_id else None
+    except Exception as e:
+        logger.error(f"shift upload entries lookup failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="shift_entries 取得に失敗しました。")
+
+    existing: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in (ent_res.data if ent_res else []) or []:
+        existing[(row["shift_day_id"], row["staff_id"])] = row
+
+    saved = 0
+    errors: list[dict[str, Any]] = []
+
+    for it, staff in matched_items:
+        staff_id = staff.get("id")
+        shift_day_id = date_to_day_id.get(it["date"])
+        if not staff_id or not shift_day_id:
+            continue
+
+        start_time = _normalize_time(it.get("start"))
+        end_time = _normalize_time(it.get("end"))
+        prev = existing.get((shift_day_id, staff_id)) or {}
+        payload = {
+            "shift_day_id": shift_day_id,
+            "staff_id": staff_id,
+            "status": it.get("status") or "出勤",
+            "start_time": start_time,
+            "end_time": end_time,
+            "assigned_area": prev.get("assigned_area") or "",
+            "note": prev.get("note") or (f"{source}: {it.get('raw')}" if it.get("raw") else source),
+        }
+
+        try:
+            if prev.get("id"):
+                supabase.table("shift_entries").update(payload).eq("id", prev["id"]).execute()
+            else:
+                inserted = supabase.table("shift_entries").insert(payload).execute()
+                if inserted.data:
+                    existing[(shift_day_id, staff_id)] = inserted.data[0]
+            saved += 1
+        except Exception as e:
+            errors.append({"employee_id": it.get("employee_id"), "date": it.get("date"), "error": str(e)[:200]})
+            if len(errors) > 50:
+                logger.error("shift upload too many errors")
+                break
+
+    return {
+        "fetched": len(items),
+        "matched_staff": len({str(staff.get("id")) for _, staff in matched_items if staff.get("id")}),
+        "saved": saved,
+        "skipped_no_staff": skipped_no_staff[:50],
+        "errors": errors[:50],
+    }
 
 
 @router.post("/shifts/sync")
@@ -293,6 +543,21 @@ def sync_jinjer_shifts(
         "skipped_no_staff": skipped_no_staff[:50],
         "errors": errors[:50],
     }
+
+
+@router.post("/shifts/upload")
+async def upload_shift_file(
+    file: UploadFile = File(...),
+    month: str | None = Form(None),
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    content = await file.read()
+    target_month, items = _parse_shift_file_to_items(file.filename or "", content, month)
+    result = _save_shift_items(items, source="csv_upload")
+    logger.info(
+        f"upload_shift_file: month={target_month} file={file.filename} fetched={result['fetched']} saved={result['saved']} skipped_no_staff={len(result['skipped_no_staff'])} errors={len(result['errors'])}"
+    )
+    return {"month": target_month, "file_name": file.filename, **result}
 
 
 @router.post("/attendances/sync")
