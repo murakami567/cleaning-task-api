@@ -18,14 +18,14 @@ def _minutes_between(start_time: str, end_time: str, break_minutes: int) -> int:
     return max((eh * 60 + em) - (sh * 60 + sm) - int(break_minutes or 0), 0)
 
 
-def _staff_map(ids: list[str]) -> dict[str, dict]:
+def _staff_map_by_id(ids: list[str]) -> dict[str, dict]:
     clean_ids = [x for x in dict.fromkeys(ids) if x]
     if not clean_ids:
         return {}
     try:
         res = supabase.table("staff_members").select("id, staff_name, staff_code").in_("id", clean_ids).execute()
     except Exception as e:
-        logger.warning(f"staff lookup skipped: {e}")
+        logger.warning(f"staff id lookup skipped: {e}")
         return {}
     return {str(row.get("id")): row for row in (res.data or [])}
 
@@ -34,13 +34,13 @@ def _staff_map(ids: list[str]) -> dict[str, dict]:
 def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"), current_user: dict = Depends(require_admin_or_leader)):
     work_date = date_param or date.today().isoformat()
     try:
-        res = supabase.table("work_logs").select("*").eq("work_date", work_date).order("created_at", desc=True).execute()
+        res = supabase.table("worklogs").select("*").eq("work_date", work_date).order("created_at", desc=True).execute()
     except Exception as e:
         logger.error(f"get_admin_worklogs failed: date={work_date} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="実働報告の取得に失敗しました。")
 
     rows = res.data or []
-    staff_by_id = _staff_map([str(row.get("user_id") or "") for row in rows])
+    staff_by_id = _staff_map_by_id([str(row.get("user_id") or "") for row in rows])
     worklogs = []
     for row in rows:
         sid = str(row.get("user_id") or "")
@@ -77,22 +77,20 @@ def get_admin_lost_items(current_user: dict = Depends(require_admin_or_leader)):
         logger.error(f"get_admin_lost_items failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="忘れ物一覧の取得に失敗しました。")
 
-    rows = res.data or []
-    staff_by_id = _staff_map([str(row.get("reported_by") or "") for row in rows])
     items = []
-    for row in rows:
-        reporter_id = str(row.get("reported_by") or "")
-        staff = staff_by_id.get(reporter_id, {})
+    for row in res.data or []:
         items.append({
             "id": row.get("id"),
-            "task_id": row.get("task_id"),
-            "task_date": row.get("task_date") or "",
+            "task_id": None,
+            "task_date": row.get("found_date") or "",
             "property_name": row.get("property_name") or "",
             "room_name": row.get("room_name") or "",
-            "item_description": row.get("item_description") or "",
-            "photo_url": row.get("photo_url") or "",
-            "reported_by": reporter_id,
-            "reported_by_name": row.get("reported_by_name") or staff.get("staff_name") or "",
+            "item_description": row.get("item_name") or "",
+            "photo_url": row.get("image_url") or "",
+            "status": row.get("status") or "",
+            "note": row.get("note") or "",
+            "reported_by": row.get("created_by_staff_code") or "",
+            "reported_by_name": row.get("created_by_staff_name") or "",
             "created_at": row.get("created_at") or "",
         })
     return {"items": items}
