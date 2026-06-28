@@ -4,6 +4,8 @@ python-dotenv
 supabase
 requests
 pandas
+openpyxl
+python-multipart
 PyJWT[crypto]
 google-api-python-client
 google-auth
