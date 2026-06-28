@@ -157,6 +157,34 @@ def _fetch_priorities() -> dict[str, dict[str, int]]:
     return out
 
 
+def _fetch_payroll_types() -> dict[str, str]:
+    """給与形態を取得する。piece=単価、hourly=時給。未設定は単価扱い。"""
+    try:
+        res = (
+            supabase.table("staff_payroll_settings")
+            .select("staff_id, payroll_type, is_active")
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(f"staff_payroll_settings lookup skipped: {e}")
+        return {}
+
+    out: dict[str, str] = {}
+    for row in res.data or []:
+        if row.get("is_active") is False:
+            continue
+        sid = str(row.get("staff_id") or "")
+        payroll_type = str(row.get("payroll_type") or "piece").strip().lower()
+        if sid:
+            out[sid] = payroll_type if payroll_type in ["piece", "hourly"] else "piece"
+    return out
+
+
+def _payroll_rank(staff: dict[str, Any]) -> int:
+    """自動割当では単価スタッフを優先し、時給スタッフは後順位にする。"""
+    return 0 if str(staff.get("payroll_type") or "piece").lower() == "piece" else 1
+
+
 def _fetch_ng_pairs() -> set[tuple[str, str]]:
     for table in ["property_ng_pairs", "property_movement_ng_pairs", "ng_property_pairs"]:
         try:
@@ -215,6 +243,7 @@ def _sort_candidate_key(item, pid, count_by_staff_property, used_points, props_b
     pri, staff = item
     sid = str(staff.get("id") or "")
     return (
+        _payroll_rank(staff),
         pri,
         count_by_staff_property[sid][pid],
         used_points[sid],
@@ -249,8 +278,12 @@ def _apply_assignment(task, assignees, dry_run: bool):
 def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
     id_by_name, name_by_id, limit_by_id, mode_by_id, point_by_id = _fetch_properties()
     priority_map = _fetch_priorities()
+    payroll_types = _fetch_payroll_types()
     ng_pairs = _fetch_ng_pairs()
     staffs = _fetch_staffs(target_date)
+    for staff in staffs:
+        sid = str(staff.get("id") or "")
+        staff["payroll_type"] = payroll_types.get(sid, "piece")
     tasks = _fetch_tasks(target_date)
     staff_by_id = {str(s.get("id")): s for s in staffs if s.get("id")}
 
@@ -385,6 +418,7 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
                 "assignment_mode": actual_mode,
                 "staff_ids": [str(s.get("id")) for s in chosen],
                 "staff_names": [str(s.get("staff_name") or "") for s in chosen],
+                "payroll_types": [str(s.get("payroll_type") or "piece") for s in chosen],
                 "share_points": share_points,
             })
 
@@ -398,6 +432,7 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
         staff_summaries.append({
             "staff_id": sid,
             "staff_name": staff.get("staff_name"),
+            "payroll_type": staff.get("payroll_type") or "piece",
             "used_points": used_points[sid],
             "daily_capacity_point": _int_or_default(staff.get("daily_capacity_point"), DEFAULT_DAILY_CAPACITY),
             "property_count": len(props_by_staff[sid]),
