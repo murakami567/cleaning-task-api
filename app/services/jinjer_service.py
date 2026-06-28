@@ -14,25 +14,14 @@ JINJER_BASE_URL = os.getenv("JINJER_BASE_URL", "https://api.jinjer.biz").rstrip(
 JINJER_API_KEY = os.getenv("JINJER_API_KEY", "")
 JINJER_SECRET_KEY = os.getenv("JINJER_SECRET_KEY", "")
 
-# 勤怠 日次打刻データ
-JINJER_ATTENDANCE_ENDPOINT = os.getenv(
-    "JINJER_ATTENDANCE_ENDPOINT",
-    "/v1/kintai-daily-attendances",
-)
+JINJER_ATTENDANCE_ENDPOINT = os.getenv("JINJER_ATTENDANCE_ENDPOINT", "/v1/kintai-daily-attendances")
+JINJER_WORK_SCHEDULE_ENDPOINT = os.getenv("JINJER_WORK_SCHEDULE_ENDPOINT", "/v2/employees/work-schedules")
 
-# シフト取得エンドポイント。必要に応じて Render 環境変数で差し替え可能。
-JINJER_WORK_SCHEDULE_ENDPOINT = os.getenv(
-    "JINJER_WORK_SCHEDULE_ENDPOINT",
-    "/v2/employees/work-schedules",
-)
-
-# トークンは 4 時間有効。安全側で 3.5 時間でキャッシュ切れにする。
 _TOKEN_TTL_SEC = 3.5 * 60 * 60
 _token_cache: dict[str, Any] = {"token": "", "expires_at": 0.0}
 
 
 def _get_access_token() -> str:
-    """Jinjer の access_token を取得。同プロセス内でメモリキャッシュ。"""
     now = time.time()
     if _token_cache["token"] and _token_cache["expires_at"] > now:
         return _token_cache["token"]
@@ -73,7 +62,6 @@ def _authorized_get(path: str, params: dict[str, Any], timeout: int = 60) -> req
     token = _get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{JINJER_BASE_URL}{path if path.startswith('/') else '/' + path}"
-
     res = requests.get(url, params=params, headers=headers, timeout=timeout)
     if res.status_code == 401:
         _token_cache["token"] = ""
@@ -95,25 +83,49 @@ def _month_start_end(month: str) -> tuple[str, str]:
 
 def _work_schedule_param_candidates(month: str, page: int) -> list[dict[str, Any]]:
     start_date, end_date = _month_start_end(month)
+    y, m = month.split("-")
     return [
         {"month": month, "page": page},
+        {"month": month.replace("-", "/"), "page": page},
         {"year_month": month, "page": page},
+        {"yearMonth": month, "page": page},
         {"target_month": month, "page": page},
+        {"targetMonth": month, "page": page},
+        {"year": y, "month": m, "page": page},
+        {"target_year": y, "target_month": m, "page": page},
         {"start_date": start_date, "end_date": end_date, "page": page},
+        {"from": start_date, "to": end_date, "page": page},
+        {"date_from": start_date, "date_to": end_date, "page": page},
+        {"startDate": start_date, "endDate": end_date, "page": page},
+        {"month": month},
+        {"start_date": start_date, "end_date": end_date},
     ]
 
 
+def _extract_page_data(body: dict[str, Any]) -> list[Any]:
+    data = body.get("data")
+    if isinstance(data, dict):
+        for key in ["items", "employees", "data", "records", "work_schedules"]:
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+    if isinstance(data, list):
+        return data
+    for key in ["items", "employees", "records", "work_schedules"]:
+        value = body.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
 def fetch_work_schedules(month: str) -> list[dict[str, Any]]:
-    """
-    Jinjer のシフトを全ページ取得して、
-    (employee_id, date, start, end) のフラットな配列で返す。
-    """
     items: list[dict[str, Any]] = []
     page = 1
     safety_max_pages = 200
     selected_param_shape: dict[str, Any] | None = None
     last_status = None
-    last_body = ""
+    last_text = ""
+    tried_shapes: list[dict[str, Any]] = []
 
     while page <= safety_max_pages:
         param_candidates = [selected_param_shape | {"page": page}] if selected_param_shape else _work_schedule_param_candidates(month, page)
@@ -121,6 +133,7 @@ def fetch_work_schedules(month: str) -> list[dict[str, Any]]:
         used_params = None
 
         for params in param_candidates:
+            tried_shapes.append({k: v for k, v in params.items() if k != "page"})
             try:
                 candidate_res = _authorized_get(JINJER_WORK_SCHEDULE_ENDPOINT, params=params, timeout=60)
             except Exception as e:
@@ -135,17 +148,16 @@ def fetch_work_schedules(month: str) -> list[dict[str, Any]]:
                 break
 
             last_status = candidate_res.status_code
-            last_body = candidate_res.text[:700]
-            # 400はパラメータ形式違いの可能性があるため次候補を試す。
-            if candidate_res.status_code != 400:
+            last_text = candidate_res.text[:500]
+            if candidate_res.status_code not in (400, 404, 422):
                 break
 
         if res is None or used_params is None:
-            logger.error(f"jinjer work-schedules returned {last_status}: body={last_body}")
+            logger.error(f"jinjer work-schedules failed status={last_status} endpoint={JINJER_WORK_SCHEDULE_ENDPOINT} tried={tried_shapes[:20]} response={last_text}")
             raise HTTPException(status_code=502, detail=f"Jinjer シフト取得失敗: {last_status}")
 
         body = res.json() or {}
-        page_data = body.get("data") or body.get("items") or body.get("employees") or []
+        page_data = _extract_page_data(body)
 
         for employee in page_data:
             if not isinstance(employee, dict):
@@ -154,6 +166,7 @@ def fetch_work_schedules(month: str) -> list[dict[str, Any]]:
                 employee.get("employee_id")
                 or employee.get("employee-id")
                 or employee.get("staff_id")
+                or employee.get("employee_code")
                 or employee.get("code")
                 or ""
             ).strip()
@@ -172,13 +185,11 @@ def fetch_work_schedules(month: str) -> list[dict[str, Any]]:
                     continue
                 items.append({"employee_id": employee_id, "date": str(schedule_date)[:10], "start": start, "end": end})
 
-        if len(page_data) < 20:
+        if len(page_data) < 20 or "page" not in used_params:
             break
         page += 1
 
-    logger.info(
-        f"jinjer work-schedules fetched: month={month} endpoint={JINJER_WORK_SCHEDULE_ENDPOINT} pages={page} items={len(items)} params={selected_param_shape}"
-    )
+    logger.info(f"jinjer work-schedules fetched: month={month} endpoint={JINJER_WORK_SCHEDULE_ENDPOINT} pages={page} items={len(items)} params={selected_param_shape}")
     return items
 
 
@@ -193,7 +204,6 @@ def _pick_first(row: dict[str, Any], keys: list[str]) -> Any:
 def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
     employee_id = str(_pick_first(row, ["employee_id", "employee-id", "staff_id", "employee_code", "code"]) or "").strip()
     work_date = _pick_first(row, ["date", "work_date", "target_date", "attendance_date"])
-
     clock_in_at = _pick_first(row, ["attended_at", "clock_in_at", "clock_in", "check_in_at", "check_in", "start_at", "start_time", "attendance_start", "begin_at", "begin_time"])
     clock_out_at = _pick_first(row, ["left_at", "clock_out_at", "clock_out", "check_out_at", "check_out", "end_at", "end_time", "attendance_end", "finish_at", "finish_time"])
 
@@ -208,18 +218,10 @@ def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
 
     if not employee_id or not work_date:
         return None
-
-    return {
-        "employee_id": employee_id,
-        "work_date": str(work_date)[:10],
-        "clock_in_at": clock_in_at,
-        "clock_out_at": clock_out_at,
-        "raw_data": row,
-    }
+    return {"employee_id": employee_id, "work_date": str(work_date)[:10], "clock_in_at": clock_in_at, "clock_out_at": clock_out_at, "raw_data": row}
 
 
 def fetch_attendances(start_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
-    """Jinjer 勤怠 日次打刻データを取得する。"""
     target_end_date = end_date or start_date
     items: list[dict[str, Any]] = []
     safety_max_pages = 200
@@ -233,7 +235,6 @@ def fetch_attendances(start_date: str, end_date: str | None = None) -> list[dict
         page = 1
         while page <= safety_max_pages:
             params = {"date": target, "page": page}
-
             try:
                 res = _authorized_get(JINJER_ATTENDANCE_ENDPOINT, params=params, timeout=60)
             except Exception as e:
@@ -271,7 +272,6 @@ def fetch_attendances(start_date: str, end_date: str | None = None) -> list[dict
             if len(page_data) < 100:
                 break
             page += 1
-
         current += timedelta(days=1)
 
     logger.info(f"jinjer attendances fetched: start={start_date} end={target_end_date} endpoint={JINJER_ATTENDANCE_ENDPOINT} items={len(items)}")
