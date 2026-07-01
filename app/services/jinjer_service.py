@@ -16,6 +16,7 @@ JINJER_SECRET_KEY = os.getenv("JINJER_SECRET_KEY", "")
 
 JINJER_ATTENDANCE_ENDPOINT = os.getenv("JINJER_ATTENDANCE_ENDPOINT", "/v1/kintai-daily-attendances")
 JINJER_WORK_SCHEDULE_ENDPOINT = os.getenv("JINJER_WORK_SCHEDULE_ENDPOINT", "/v2/employees/work-schedules")
+JINJER_ATTENDANCE_GROUP_IDS = os.getenv("JINJER_ATTENDANCE_GROUP_IDS", "")
 
 _TOKEN_TTL_SEC = 3.5 * 60 * 60
 _token_cache: dict[str, Any] = {"token": "", "expires_at": 0.0}
@@ -234,58 +235,128 @@ def _normalize_attendance_row(row: dict[str, Any]) -> dict[str, Any] | None:
     return {"employee_id": employee_id, "work_date": str(work_date)[:10], "clock_in_at": clock_in_at, "clock_out_at": clock_out_at, "raw_data": row}
 
 
+def _attendance_group_ids() -> list[str | None]:
+    values = [x.strip() for x in JINJER_ATTENDANCE_GROUP_IDS.split(",") if x.strip()]
+    return values or [None]
+
+
+def _attendance_param_candidates(target: str, page: int, group_id: str | None) -> list[dict[str, Any]]:
+    base = {"date": target, "page": page}
+    if not group_id:
+        return [base]
+
+    return [
+        {**base, "group_id": group_id},
+        {**base, "attendance_group_id": group_id},
+        {**base, "attendance_group_ids": group_id},
+        {**base, "kintai_group_id": group_id},
+        {**base, "kintai_group_ids": group_id},
+        {**base, "work_group_id": group_id},
+        {**base, "work_group_ids": group_id},
+    ]
+
+
+def _fetch_attendances_one_group(target: str, group_id: str | None, safety_max_pages: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    items: list[dict[str, Any]] = []
+    page = 1
+    selected_param_shape: dict[str, Any] | None = None
+    last_status = None
+    last_text = ""
+
+    while page <= safety_max_pages:
+        param_candidates = [selected_param_shape | {"page": page}] if selected_param_shape else _attendance_param_candidates(target, page, group_id)
+        res = None
+        used_params = None
+
+        for params in param_candidates:
+            try:
+                candidate_res = _authorized_get(JINJER_ATTENDANCE_ENDPOINT, params=params, timeout=60)
+            except Exception as e:
+                logger.error(f"jinjer attendances request failed: date={target} page={page} group_id={group_id} params={params} {e}", exc_info=True)
+                raise HTTPException(status_code=502, detail="Jinjer 打刻取得に失敗しました。")
+
+            if candidate_res.status_code == 200:
+                res = candidate_res
+                used_params = params
+                if selected_param_shape is None:
+                    selected_param_shape = {k: v for k, v in params.items() if k != "page"}
+                break
+
+            last_status = candidate_res.status_code
+            last_text = candidate_res.text[:700]
+            if candidate_res.status_code not in (400, 404, 422):
+                break
+
+        if res is None or used_params is None:
+            logger.error(
+                f"jinjer attendances returned {last_status}: endpoint={JINJER_ATTENDANCE_ENDPOINT} date={target} group_id={group_id} response={last_text}"
+            )
+            raise HTTPException(status_code=502, detail=f"Jinjer 打刻取得失敗: {last_status}")
+
+        body = res.json() or {}
+        page_data = body.get("data") or body.get("items") or body.get("attendances") or []
+
+        flat_rows: list[dict[str, Any]] = []
+        for row in page_data:
+            if not isinstance(row, dict):
+                continue
+            employee_id = row.get("employee_id") or row.get("employee-id") or row.get("staff_id")
+            nested = row.get("attendances") or row.get("time_records") or row.get("work_records")
+            if isinstance(nested, list):
+                for child in nested:
+                    if isinstance(child, dict):
+                        flat_rows.append({**child, "employee_id": employee_id or child.get("employee_id"), "jinjer_attendance_group_id": group_id})
+            else:
+                flat_rows.append({**row, "jinjer_attendance_group_id": group_id})
+
+        for row in flat_rows:
+            normalized = _normalize_attendance_row(row)
+            if normalized:
+                items.append(normalized)
+
+        if len(page_data) < 100:
+            break
+        page += 1
+
+    logger.info(
+        f"jinjer attendances group fetched: date={target} group_id={group_id or 'default'} pages={page} items={len(items)} params={selected_param_shape}"
+    )
+    return items, selected_param_shape
+
+
 def fetch_attendances(start_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
     target_end_date = end_date or start_date
     items: list[dict[str, Any]] = []
     safety_max_pages = 200
+    seen: set[tuple[str, str, str, str, str]] = set()
 
     start_d = date_cls.fromisoformat(start_date)
     end_d = date_cls.fromisoformat(target_end_date)
     current = start_d
+    group_ids = _attendance_group_ids()
 
     while current <= end_d:
         target = current.isoformat()
-        page = 1
-        while page <= safety_max_pages:
-            params = {"date": target, "page": page}
-            try:
-                res = _authorized_get(JINJER_ATTENDANCE_ENDPOINT, params=params, timeout=60)
-            except Exception as e:
-                logger.error(f"jinjer attendances request failed: date={target} page={page} {e}", exc_info=True)
-                raise HTTPException(status_code=502, detail="Jinjer 打刻取得に失敗しました。")
-
-            if res.status_code != 200:
-                logger.error(f"jinjer attendances returned {res.status_code}: endpoint={JINJER_ATTENDANCE_ENDPOINT} params={params} body={res.text[:700]}")
-                raise HTTPException(status_code=502, detail=f"Jinjer 打刻取得失敗: {res.status_code}")
-
-            body = res.json() or {}
-            page_data = body.get("data") or body.get("items") or body.get("attendances") or []
-
-            flat_rows: list[dict[str, Any]] = []
-            for row in page_data:
-                if not isinstance(row, dict):
-                    continue
-                employee_id = row.get("employee_id") or row.get("employee-id") or row.get("staff_id")
-                nested = row.get("attendances") or row.get("time_records") or row.get("work_records")
-                if isinstance(nested, list):
-                    for child in nested:
-                        if isinstance(child, dict):
-                            flat_rows.append({**child, "employee_id": employee_id or child.get("employee_id")})
-                else:
-                    flat_rows.append(row)
-
-            for row in flat_rows:
-                normalized = _normalize_attendance_row(row)
-                if not normalized:
-                    continue
+        for group_id in group_ids:
+            group_items, _shape = _fetch_attendances_one_group(target, group_id, safety_max_pages)
+            for normalized in group_items:
                 work_date = normalized["work_date"]
-                if start_date <= work_date <= target_end_date:
-                    items.append(normalized)
-
-            if len(page_data) < 100:
-                break
-            page += 1
+                if not (start_date <= work_date <= target_end_date):
+                    continue
+                key = (
+                    str(normalized.get("employee_id") or ""),
+                    str(normalized.get("work_date") or ""),
+                    str(normalized.get("clock_in_at") or ""),
+                    str(normalized.get("clock_out_at") or ""),
+                    str((normalized.get("raw_data") or {}).get("jinjer_attendance_group_id") or "default"),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(normalized)
         current += timedelta(days=1)
 
-    logger.info(f"jinjer attendances fetched: start={start_date} end={target_end_date} endpoint={JINJER_ATTENDANCE_ENDPOINT} items={len(items)}")
+    logger.info(
+        f"jinjer attendances fetched: start={start_date} end={target_end_date} endpoint={JINJER_ATTENDANCE_ENDPOINT} groups={','.join([g or 'default' for g in group_ids])} items={len(items)}"
+    )
     return items
