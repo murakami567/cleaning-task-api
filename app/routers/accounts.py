@@ -97,14 +97,16 @@ def upsert_staff(
 
 
 @router.get("/staff-property-priorities")
-def get_staff_property_priorities(staff_id: str | None = None):
+def get_staff_property_priorities(staff_id: str | None = None, property_id: str | None = None):
     try:
         q = supabase.table("staff_property_priorities").select("*")
         if staff_id:
             q = q.eq("staff_id", staff_id)
-        res = q.order("staff_id").order("priority_order").execute()
+        if property_id:
+            q = q.eq("property_id", property_id)
+        res = q.order("property_id").order("priority_order").execute()
     except Exception as e:
-        logger.error(f"accounts get_staff_property_priorities failed: staff_id={staff_id} {e}", exc_info=True)
+        logger.error(f"accounts get_staff_property_priorities failed: staff_id={staff_id} property_id={property_id} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="優先順位の取得に失敗しました。")
     return res.data or []
 
@@ -130,3 +132,30 @@ def upsert_staff_property_priorities(
 
     logger.info(f"accounts upsert_staff_property_priorities: staff_id={staff_id} count={len(rows)}")
     return {"ok": True, "staff_id": staff_id, "count": len(rows), "items": rows}
+
+
+@router.post("/property-staff-priorities/upsert")
+def upsert_property_staff_priorities(
+    property_id: str = Body(...),
+    staff_ids: list[str] = Body(default=[]),
+):
+    property_id = str(property_id or "").strip()
+    staff_ids = [sid for sid in dict.fromkeys(staff_ids or []) if sid]
+    if not property_id:
+        raise HTTPException(status_code=400, detail="property_id is required")
+
+    rows = [
+        {"property_id": property_id, "staff_id": sid, "priority_order": idx + 1}
+        for idx, sid in enumerate(staff_ids)
+    ]
+
+    try:
+        supabase.table("staff_property_priorities").delete().eq("property_id", property_id).execute()
+        if rows:
+            supabase.table("staff_property_priorities").insert(rows).execute()
+    except Exception as e:
+        logger.error(f"accounts upsert_property_staff_priorities failed: property_id={property_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="物件別スタッフ優先順位の保存に失敗しました。")
+
+    logger.info(f"accounts upsert_property_staff_priorities: property_id={property_id} count={len(rows)}")
+    return {"ok": True, "property_id": property_id, "count": len(rows), "items": rows}
