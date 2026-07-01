@@ -137,6 +137,23 @@ def _enrich_shift_with_attendance(today_shift: dict | None, attendance_map: dict
     }
 
 
+def _date_key(value) -> str:
+    return str(value or "")[:10]
+
+
+def _int_value(value, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _room_lookup_key(property_name: str, room_name: str) -> str:
+    return f"{property_name}::{room_name}"
+
+
 @router.get("/home")
 def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
     today = _today_jst_iso()
@@ -193,6 +210,99 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
             for row in (on_break_res.data or [])
         ],
     }
+
+
+@router.get("/prep-list")
+def get_prep_list(current_user: dict = Depends(require_admin_or_leader)):
+    """
+    物件管理 > 準備物確認 用。
+    明日以降の清掃タスクに対して、部屋マスタの準備数を付与して返す。
+    """
+    today = _today_jst_iso()
+    end_date = (date.fromisoformat(today) + timedelta(days=14)).isoformat()
+    excluded_statuses = {"CXL", "キャンセル", "cancelled", "Cancelled", "完了"}
+
+    try:
+        task_res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("*")
+            .gt("task_date", today)
+            .lte("task_date", end_date)
+            .order("task_date")
+            .order("property_name")
+            .order("room_name")
+            .execute()
+        )
+        prop_res = supabase.table("properties").select("id, property_name").execute()
+        room_res = (
+            supabase
+            .table("rooms")
+            .select("id, property_id, room_name, room_key, normalized_room_key, prep_d, prep_s, prep_spare_s, prep_ta")
+            .eq("is_active", True)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_prep_list failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="準備物一覧の取得に失敗しました。")
+
+    property_name_by_id = {
+        str(row.get("id")): str(row.get("property_name") or "")
+        for row in (prop_res.data or [])
+        if row.get("id")
+    }
+
+    room_by_pair: dict[str, dict] = {}
+    room_by_key: dict[str, dict] = {}
+    for room in room_res.data or []:
+        property_name = property_name_by_id.get(str(room.get("property_id") or ""), "")
+        room_name = str(room.get("room_name") or "")
+        if property_name and room_name:
+            room_by_pair[_room_lookup_key(property_name, room_name)] = room
+        for key in [room.get("room_key"), room.get("normalized_room_key")]:
+            if key:
+                room_by_key[str(key)] = room
+
+    items = []
+    for task in task_res.data or []:
+        status = str(task.get("status") or "")
+        if status in excluded_statuses:
+            continue
+
+        property_name = str(task.get("property_name") or "")
+        room_name = str(task.get("room_name") or "")
+        room_key = str(task.get("room_key") or "")
+        room = room_by_key.get(room_key) or room_by_pair.get(_room_lookup_key(property_name, room_name)) or {}
+
+        guest_count = (
+            task.get("next_guest_count")
+            or task.get("guest_count")
+            or task.get("adult_count")
+            or task.get("guests")
+        )
+        stay_nights = (
+            task.get("next_stay_nights")
+            or task.get("stay_nights")
+            or task.get("nights")
+            or task.get("gap_nights")
+        )
+
+        items.append({
+            "task_id": task.get("id"),
+            "task_date": _date_key(task.get("task_date") or task.get("checkout_date")),
+            "property_name": property_name,
+            "room_name": room_name,
+            "room_key": room_key,
+            "towel_count": _calc_towel_count(property_name, guest_count, stay_nights),
+            "prep_d": _int_value(room.get("prep_d"), 0),
+            "prep_s": _int_value(room.get("prep_s"), 0),
+            "prep_spare_s": _int_value(room.get("prep_spare_s"), 0),
+            "prep_ta": _int_value(room.get("prep_ta"), 0),
+            "note": task.get("note") or "",
+        })
+
+    logger.info(f"get_prep_list: today={today} end={end_date} count={len(items)}")
+    return {"items": items, "start_date": today, "end_date": end_date}
 
 
 @router.post("/today-message")
