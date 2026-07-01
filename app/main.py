@@ -17,6 +17,7 @@ from app.routers.admin_portal import router as admin_portal_router
 from app.routers.jinjer_sync_override import router as jinjer_sync_override_router
 from app.routers.jinjer import router as jinjer_router
 from app.routers.lineworks import router as lineworks_router
+from app.routers.notifications import router as notifications_router
 from app.routers.mate_carte import router as mate_carte_router
 from app.routers.backups import router as backups_router
 from app.routers.monthly_reports import router as monthly_reports_router
@@ -32,12 +33,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://cleaning-task-admin.onrender.com",
-        "https://cleaning-task-gusk.onrender.com",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,6 +65,7 @@ app.include_router(admin_portal_router)
 app.include_router(jinjer_sync_override_router)
 app.include_router(jinjer_router)
 app.include_router(lineworks_router)
+app.include_router(notifications_router)
 app.include_router(mate_carte_router)
 app.include_router(backups_router)
 app.include_router(monthly_reports_router)
