@@ -14,6 +14,7 @@ from app.routers.employee_tasks_override import router as employee_tasks_router
 from app.routers.employee import router as employee_router
 from app.routers.admin_home_active_override import router as admin_home_active_router
 from app.routers.admin_portal import router as admin_portal_router
+from app.routers.jinjer_sync_override import router as jinjer_sync_override_router
 from app.routers.jinjer import router as jinjer_router
 from app.routers.lineworks import router as lineworks_router
 from app.routers.mate_carte import router as mate_carte_router
@@ -65,6 +66,7 @@ app.include_router(employee_tasks_router)
 app.include_router(employee_router)
 app.include_router(admin_home_active_router)
 app.include_router(admin_portal_router)
+app.include_router(jinjer_sync_override_router)
 app.include_router(jinjer_router)
 app.include_router(lineworks_router)
 app.include_router(mate_carte_router)
