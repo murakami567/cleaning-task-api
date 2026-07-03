@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_or_leader
+from app.services.jinjer_service import fetch_attendances
 
 router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal-home-override"])
 logger = get_logger(__name__)
@@ -16,12 +18,39 @@ def _today_jst_iso() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=9)).date().isoformat()
 
 
-def _get_attendance_map(target_date: str) -> dict[str, dict]:
-    """
-    attendance_logs を staff_id ごとに返す。
-    既存環境で日付カラムが work_date/date/target_date のどれでも拾えるようにする。
-    以前は work_date クエリが0件でもそこで終了していたため、別カラム運用時に未打刻扱いになっていた。
-    """
+def _get_staff_code_to_id() -> dict[str, str]:
+    try:
+        res = (
+            supabase.table("staff_members")
+            .select("id, staff_code")
+            .eq("is_active", True)
+            .limit(10000)
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(f"staff code lookup skipped for attendance fallback: {e}")
+        return {}
+
+    out: dict[str, str] = {}
+    for row in res.data or []:
+        code = str(row.get("staff_code") or "").strip()
+        staff_id = str(row.get("id") or "").strip()
+        if code and staff_id:
+            out[code] = staff_id
+    return out
+
+
+def _pick_better_attendance(prev: dict | None, row: dict) -> dict:
+    if not prev:
+        return row
+    prev_in = prev.get("clock_in_at") or prev.get("started_at")
+    row_in = row.get("clock_in_at") or row.get("started_at")
+    if not prev_in and row_in:
+        return row
+    return prev
+
+
+def _get_attendance_map_from_db(target_date: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for date_column in ["work_date", "date", "target_date"]:
         try:
@@ -40,14 +69,48 @@ def _get_attendance_map(target_date: str) -> dict[str, dict]:
             if not staff_id:
                 continue
             key = str(staff_id)
-            prev = out.get(key)
-            if not prev:
-                out[key] = row
-                continue
-            # 複数打刻グループ等で同一スタッフが複数行ある場合は、出勤打刻がある行を優先
-            if not (prev.get("clock_in_at") or prev.get("started_at")) and (row.get("clock_in_at") or row.get("started_at")):
-                out[key] = row
+            out[key] = _pick_better_attendance(out.get(key), row)
     return out
+
+
+def _get_attendance_map_from_jinjer_live(target_date: str) -> dict[str, dict]:
+    """
+    attendance_logs が未同期・空の場合の救済。
+    ホーム表示時にJinjerから当日分を直接取得して社内スケジュールに反映する。
+    DB保存は行わないため、既存同期処理はそのまま温存する。
+    """
+    try:
+        items = fetch_attendances(target_date, target_date)
+    except Exception as e:
+        logger.warning(f"live Jinjer attendance fallback skipped: date={target_date} error={e}")
+        return {}
+
+    code_to_id = _get_staff_code_to_id()
+    out: dict[str, dict] = {}
+    for item in items:
+        employee_id = str(item.get("employee_id") or "").strip()
+        staff_id = code_to_id.get(employee_id)
+        if not staff_id:
+            continue
+        row = {
+            "staff_id": staff_id,
+            "work_date": item.get("work_date") or target_date,
+            "clock_in_at": item.get("clock_in_at"),
+            "clock_out_at": item.get("clock_out_at"),
+            "source": "jinjer_live",
+            "raw_data": item.get("raw_data"),
+        }
+        out[staff_id] = _pick_better_attendance(out.get(staff_id), row)
+
+    logger.info(f"live Jinjer attendance fallback: date={target_date} fetched={len(items)} matched={len(out)}")
+    return out
+
+
+def _get_attendance_map(target_date: str) -> dict[str, dict]:
+    db_map = _get_attendance_map_from_db(target_date)
+    if db_map:
+        return db_map
+    return _get_attendance_map_from_jinjer_live(target_date)
 
 
 def _is_active_shift_entry(entry: dict) -> bool:
