@@ -51,6 +51,22 @@ def _is_locked(task: dict[str, Any]) -> bool:
     return bool(task.get("assignment_locked"))
 
 
+def _assigned_staff_ids(task: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    ids = task.get("assigned_staff_ids")
+    if isinstance(ids, list):
+        out.extend([str(x) for x in ids if x])
+    elif ids:
+        out.append(str(ids))
+
+    sid = task.get("assigned_staff_id")
+    if sid:
+        out.append(str(sid))
+
+    # 重複除去しつつ順序維持
+    return list(dict.fromkeys(out))
+
+
 def _is_blank_assignment(task: dict[str, Any]) -> bool:
     ids = task.get("assigned_staff_ids")
     names = task.get("assigned_staff_names")
@@ -176,6 +192,19 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
     tasks = _fetch_tasks(target_date)
     staff_by_id = {str(s.get("id")): s for s in staffs if s.get("id")}
 
+    # 既存割当も上限計算に含める。
+    # 再実行時に「未割当だけ」を追加してしまうと、同じスタッフが物件上限を超えて増えるため。
+    existing_assigned_by_property_staff: dict[tuple[str, str], int] = defaultdict(int)
+    for task in tasks:
+        property_name = str(task.get("property_name") or "")
+        pid = id_by_name.get(property_name)
+        if not pid:
+            continue
+        if _is_blank_assignment(task):
+            continue
+        for sid in _assigned_staff_ids(task):
+            existing_assigned_by_property_staff[(pid, sid)] += 1
+
     target_tasks = [t for t in tasks if not _is_locked(t) and _is_blank_assignment(t)]
     property_tasks: dict[str, list[dict[str, Any]]] = defaultdict(list)
     skipped = []
@@ -217,6 +246,11 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
             "assigned_staff_names": [],
             "assigned_count": 0,
             "skipped_count": 0,
+            "existing_assigned_by_staff": {
+                sid: existing_assigned_by_property_staff.get((pid, sid), 0)
+                for sid in staff_ids
+                if existing_assigned_by_property_staff.get((pid, sid), 0) > 0
+            },
         }
 
         remaining = list(rows)
@@ -249,13 +283,28 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
                 remaining = []
                 break
 
+            already_count = existing_assigned_by_property_staff.get((pid, sid), 0)
+            available_count = max_count - already_count
+            if available_count <= 0:
+                skipped.append({
+                    "property_id": pid,
+                    "property_name": property_name,
+                    "staff_id": sid,
+                    "staff_name": staff_by_id[sid].get("staff_name"),
+                    "reason": "staff_property_capacity_full",
+                    "already_count": already_count,
+                    "max_assignable_count": max_count,
+                })
+                continue
+
             staff = staff_by_id[sid]
-            take_count = min(max_count, len(remaining))
+            take_count = min(available_count, len(remaining))
             take_rows = remaining[:take_count]
             remaining = remaining[take_count:]
 
             for task in take_rows:
                 _apply_assignment(task, staff, dry_run)
+                existing_assigned_by_property_staff[(pid, sid)] += 1
                 if sid not in summaries[pid]["assigned_staff_ids"]:
                     summaries[pid]["assigned_staff_ids"].append(sid)
                     summaries[pid]["assigned_staff_names"].append(str(staff.get("staff_name") or ""))
@@ -269,6 +318,8 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
                     "staff_name": staff.get("staff_name"),
                     "priority_order": priority_index,
                     "max_assignable_count": max_count,
+                    "already_count_before_assign": already_count,
+                    "available_count_before_assign": available_count,
                 })
 
         for task in remaining:
@@ -298,7 +349,7 @@ def _assign_one_day(target_date: str, dry_run: bool) -> dict[str, Any]:
 
     return {
         "date": target_date,
-        "logic": "simple_property_priority_v1",
+        "logic": "simple_property_priority_v2_existing_capacity",
         "staff_count": len(staffs),
         "task_count": len(tasks),
         "locked_count": len([t for t in tasks if _is_locked(t)]),
