@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import require_admin_write
 
 router = APIRouter(tags=["properties"])
 logger = get_logger(__name__)
@@ -52,6 +53,7 @@ def create_property(
     max_assignable_count: int | None = Body(None),
     assignment_mode: str | None = Body("solo"),
     cleaning_point: int | None = Body(60),
+    current_user: dict = Depends(require_admin_write),
 ):
     payload = {
         "property_code": property_code.strip(),
@@ -91,6 +93,7 @@ def update_property(
     max_assignable_count: int | None = Body(None),
     assignment_mode: str | None = Body(None),
     cleaning_point: int | None = Body(None),
+    current_user: dict = Depends(require_admin_write),
 ):
     payload = {}
 
