@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import require_admin_write
 
 router = APIRouter(tags=["rooms"])
 logger = get_logger(__name__)
@@ -43,6 +44,7 @@ def create_room(
     prep_spare_s: int | None = Body(0),
     prep_ta: int | None = Body(0),
     cleaning_score: int | None = Body(None),
+    current_user: dict = Depends(require_admin_write),
 ):
     property_id = _text(property_id)
     room_name = _text(room_name)
@@ -89,6 +91,7 @@ def bulk_create_rooms(
     room_names: list[str] = Body(...),
     default_capacity: int | None = Body(1),
     start_sort_order: int | None = Body(1),
+    current_user: dict = Depends(require_admin_write),
 ):
     property_id = _text(property_id)
     names = [_text(name) for name in room_names or [] if _text(name)]
@@ -160,6 +163,7 @@ def update_room(
     prep_spare_s: int | None = Body(None),
     prep_ta: int | None = Body(None),
     cleaning_score: int | None = Body(None),
+    current_user: dict = Depends(require_admin_write),
 ):
     payload = {}
     if property_id is not None:
@@ -203,7 +207,7 @@ def update_room(
 
 
 @router.post("/rooms/delete")
-def delete_room(room_id: str = Body(...)):
+def delete_room(room_id: str = Body(...), current_user: dict = Depends(require_admin_write)):
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
     try:
