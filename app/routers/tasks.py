@@ -9,15 +9,41 @@ from app.services.auth_service import get_current_user
 router = APIRouter(tags=["tasks"])
 logger = get_logger(__name__)
 
+NON_CLEANING_STATUS_VALUES = {"未着手", "対応中", "完了"}
+NON_CLEANING_STATUS_MAP = {
+    "清掃開始": "対応中",
+    "清掃中": "対応中",
+    "作業中": "対応中",
+    "対応済み": "完了",
+    "清掃完了": "完了",
+}
+
 
 def _today_jst_iso() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=9)).date().isoformat()
 
 
+def _normalize_non_cleaning_status(status: str | None) -> str:
+    value = str(status or "未着手").strip()
+    value = NON_CLEANING_STATUS_MAP.get(value, value)
+    if value not in NON_CLEANING_STATUS_VALUES:
+        raise HTTPException(status_code=400, detail="清掃外タスクのステータスは 未着手・対応中・完了 のみ指定できます。")
+    return value
+
+
+def _normalize_non_cleaning_row(row: dict):
+    row = dict(row or {})
+    status = str(row.get("status") or "未着手").strip()
+    row["status"] = NON_CLEANING_STATUS_MAP.get(status, status)
+    if row["status"] not in NON_CLEANING_STATUS_VALUES:
+        row["status"] = "未着手"
+    return row
+
+
 def _auto_progress_started_tasks():
     """
-    「清掃開始」状態で cleaning_started_at から 1 分経過したタスクを「清掃中」へ自動遷移させる。
-    一覧取得系エンドポイントの先頭で呼ぶ。失敗しても取得処理自体は継続する。
+    「清掃開始」状態で cleaning_started_at から 1 分経過した清掃タスクを「清掃中」へ自動遷移させる。
+    清掃外タスクは対象外。
     """
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
@@ -125,15 +151,11 @@ def update_task(
 ):
     payload = {}
 
-    # 清掃日の更新
-    # checkout_date / next_checkin_date は変更しない
     if task_date is not None:
         payload["task_date"] = task_date
 
     if status is not None:
         payload["status"] = status
-        # 「清掃開始」になった瞬間にサーバ側で開始時刻を記録する。
-        # それ以外のステータスに遷移したら開始時刻はクリアして残骸を残さない。
         if status == "清掃開始":
             payload["cleaning_started_at"] = datetime.now(timezone.utc).isoformat()
         else:
@@ -180,12 +202,8 @@ def update_task(
         raise HTTPException(status_code=500, detail=f"supabase update failed: {str(e)}")
 
     logger.info(f"update_task: task_id={task_id}")
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "updated": payload,
-        "data": res.data,
-    }
+    return {"ok": True, "task_id": task_id, "updated": payload, "data": res.data}
+
 
 # =========================================================
 # 指定日タスク（過去も未来も対応）
@@ -212,6 +230,7 @@ def get_tasks_by_date(date: str):
     logger.info(f"get_tasks_by_date: date={date} count={len(res.data or [])}")
     return res.data
 
+
 # =========================================================
 # 清掃外タスク
 # =========================================================
@@ -228,8 +247,9 @@ def get_non_cleaning_tasks():
         logger.error(f"get_non_cleaning_tasks failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="非清掃タスク取得に失敗しました。")
 
-    logger.info(f"get_non_cleaning_tasks: count={len(res.data or [])}")
-    return res.data
+    rows = [_normalize_non_cleaning_row(row) for row in (res.data or [])]
+    logger.info(f"get_non_cleaning_tasks: count={len(rows)}")
+    return rows
 
 
 @router.post("/non-cleaning-tasks/create")
@@ -247,7 +267,7 @@ def create_non_cleaning_task(
 ):
     payload = {
         "task_date": task_date,
-        "status": status,
+        "status": _normalize_non_cleaning_status(status),
         "category": category,
         "title": title,
         "deadline": deadline,
@@ -258,7 +278,6 @@ def create_non_cleaning_task(
         "note": note,
     }
 
-    # 旧単数列も残すなら先頭だけ入れる
     payload["assignee_id"] = assignee_ids[0] if assignee_ids and len(assignee_ids) > 0 else None
     payload["assignee_name"] = assignee_names[0] if assignee_names and len(assignee_names) > 0 else None
 
@@ -272,4 +291,68 @@ def create_non_cleaning_task(
         raise HTTPException(status_code=500, detail="非清掃タスク作成に失敗しました。")
 
     logger.info(f"create_non_cleaning_task: id={res.data[0].get('id')}")
-    return res.data[0]
+    return _normalize_non_cleaning_row(res.data[0])
+
+
+@router.post("/non-cleaning-tasks/update")
+def update_non_cleaning_task(
+    task_id: str = Body(...),
+    task_date: str | None = Body(None),
+    status: str | None = Body(None),
+    category: str | None = Body(None),
+    title: str | None = Body(None),
+    deadline: str | None = Body(None),
+    assignee_ids: list[str] | None = Body(None),
+    assignee_names: list[str] | None = Body(None),
+    checker_id: str | None = Body(None),
+    checker_name: str | None = Body(None),
+    note: str | None = Body(None),
+):
+    payload = {}
+    if task_date is not None:
+        payload["task_date"] = task_date
+    if status is not None:
+        payload["status"] = _normalize_non_cleaning_status(status)
+    if category is not None:
+        payload["category"] = category
+    if title is not None:
+        payload["title"] = title
+    if deadline is not None:
+        payload["deadline"] = deadline
+    if assignee_ids is not None:
+        payload["assignee_ids"] = assignee_ids
+        payload["assignee_id"] = assignee_ids[0] if len(assignee_ids) > 0 else None
+    if assignee_names is not None:
+        payload["assignee_names"] = assignee_names
+        payload["assignee_name"] = assignee_names[0] if len(assignee_names) > 0 else None
+    if checker_id is not None:
+        payload["checker_id"] = checker_id
+    if checker_name is not None:
+        payload["checker_name"] = checker_name
+    if note is not None:
+        payload["note"] = note
+
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    if not payload:
+        raise HTTPException(status_code=400, detail="no update fields")
+
+    try:
+        res = supabase.table("non_cleaning_tasks").update(payload).eq("id", task_id).execute()
+    except Exception as e:
+        logger.error(f"update_non_cleaning_task failed: task_id={task_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="非清掃タスク更新に失敗しました。")
+
+    return {"ok": True, "task_id": task_id, "updated": payload, "data": [_normalize_non_cleaning_row(row) for row in (res.data or [])]}
+
+
+@router.post("/non-cleaning-tasks/delete")
+def delete_non_cleaning_task(task_id: str = Body(...)):
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    try:
+        res = supabase.table("non_cleaning_tasks").delete().eq("id", task_id).execute()
+    except Exception as e:
+        logger.error(f"delete_non_cleaning_task failed: task_id={task_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="非清掃タスク削除に失敗しました。")
+    return {"ok": True, "task_id": task_id, "data": res.data or []}
