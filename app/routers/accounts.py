@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import require_admin_write
 
 router = APIRouter(tags=["accounts"])
 logger = get_logger(__name__)
@@ -42,6 +43,7 @@ def upsert_staff(
     daily_capacity_point: int | None = Body(None),
     solo_enabled: bool | None = Body(None),
     shared_enabled: bool | None = Body(None),
+    current_user: dict = Depends(require_admin_write),
 ):
     priority_ids = list(dict.fromkeys(unchecked_property_ids or []))
     priority_set = set(priority_ids)
@@ -115,6 +117,7 @@ def get_staff_property_priorities(staff_id: str | None = None, property_id: str 
 def upsert_staff_property_priorities(
     staff_id: str = Body(...),
     property_ids: list[str] = Body(default=[]),
+    current_user: dict = Depends(require_admin_write),
 ):
     property_ids = [pid for pid in dict.fromkeys(property_ids or []) if pid]
     rows = [
@@ -138,6 +141,7 @@ def upsert_staff_property_priorities(
 def upsert_property_staff_priorities(
     property_id: str = Body(...),
     staff_ids: list[str] = Body(default=[]),
+    current_user: dict = Depends(require_admin_write),
 ):
     property_id = str(property_id or "").strip()
     staff_ids = [sid for sid in dict.fromkeys(staff_ids or []) if sid]
