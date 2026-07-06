@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
@@ -9,6 +11,7 @@ logger = get_logger(__name__)
 
 
 ASSIGNMENT_MODES = ["solo", "shared", "both"]
+COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def _normalize_max_assignable_count(value) -> int | None:
@@ -43,6 +46,15 @@ def _normalize_cleaning_point(value) -> int:
     return n
 
 
+def _normalize_task_color(value: str | None) -> str:
+    color = str(value or "#ffffff").strip()
+    if not color:
+        return "#ffffff"
+    if not COLOR_PATTERN.match(color):
+        raise HTTPException(status_code=400, detail="task_color must be #RRGGBB format")
+    return color.lower()
+
+
 @router.post("/properties/create")
 def create_property(
     property_code: str = Body(...),
@@ -53,6 +65,7 @@ def create_property(
     max_assignable_count: int | None = Body(None),
     assignment_mode: str | None = Body("solo"),
     cleaning_point: int | None = Body(60),
+    task_color: str | None = Body("#ffffff"),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {
@@ -64,6 +77,7 @@ def create_property(
         "max_assignable_count": _normalize_max_assignable_count(max_assignable_count),
         "assignment_mode": _normalize_assignment_mode(assignment_mode),
         "cleaning_point": _normalize_cleaning_point(cleaning_point),
+        "task_color": _normalize_task_color(task_color),
     }
 
     if not payload["property_code"]:
@@ -93,6 +107,7 @@ def update_property(
     max_assignable_count: int | None = Body(None),
     assignment_mode: str | None = Body(None),
     cleaning_point: int | None = Body(None),
+    task_color: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {}
@@ -113,6 +128,8 @@ def update_property(
         payload["assignment_mode"] = _normalize_assignment_mode(assignment_mode)
     if cleaning_point is not None:
         payload["cleaning_point"] = _normalize_cleaning_point(cleaning_point)
+    if task_color is not None:
+        payload["task_color"] = _normalize_task_color(task_color)
 
     if not property_id:
         raise HTTPException(status_code=400, detail="property_id is required")
