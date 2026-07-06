@@ -9,6 +9,18 @@ from app.logger import get_logger
 router = APIRouter(tags=["compat"])
 logger = get_logger(__name__)
 
+SHIFT_DAY_SELECT_MINIMAL = (
+    "id, shift_date, note, "
+    "shift_entries(id, shift_day_id, staff_id, status, start_time, end_time, assigned_area, note, "
+    "staff_members(id, staff_code, staff_name, role, is_active, sort_order, available_property_ids))"
+)
+
+SHIFT_BOARD_SELECT_MINIMAL = (
+    "id, shift_date, note, "
+    "shift_entries(id, shift_day_id, staff_id, status, start_time, end_time, assigned_area, note, "
+    "staff_members(id, staff_code, staff_name, role, is_active, sort_order))"
+)
+
 
 def _safe_data(res: Any):
     return res.data if getattr(res, "data", None) is not None else []
@@ -32,30 +44,31 @@ def _date_key(value: Any) -> str:
     return str(value or "")[:10]
 
 
-def _fetch_all_cleaning_tasks_for_count() -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    page_size = 1000
-    start = 0
-
-    # load_score が存在しない環境でも落ちないよう、まず最小カラムで取得する。
-    select_cols = "id, task_date, checkout_date, status"
-
-    while True:
-        end = start + page_size - 1
+def _fetch_cleaning_tasks_for_month_count(start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+    """shift-board 用。全件取得をやめて対象月だけ取得する。"""
+    try:
         res = (
             supabase.table("cleaning_tasks")
-            .select(select_cols)
+            .select("id, task_date, checkout_date, status, load_score")
+            .gte("task_date", start_iso)
+            .lt("task_date", end_iso)
             .order("task_date")
-            .range(start, end)
+            .limit(5000)
             .execute()
         )
-        batch = res.data or []
-        rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        start += page_size
-
-    return rows
+        return res.data or []
+    except Exception as e:
+        logger.warning(f"cleaning task month count with load_score failed: {e}")
+        res = (
+            supabase.table("cleaning_tasks")
+            .select("id, task_date, checkout_date, status")
+            .gte("task_date", start_iso)
+            .lt("task_date", end_iso)
+            .order("task_date")
+            .limit(5000)
+            .execute()
+        )
+        return res.data or []
 
 
 @router.get("/properties")
@@ -90,13 +103,17 @@ def get_rooms(property_id: str | None = None):
 @router.get("/shifts")
 def get_shifts(shift_date: str | None = None):
     try:
-        q = supabase.table("shift_days").select("*, shift_entries(*, staff_members(*))")
-        if shift_date:
-            q = q.eq("shift_date", shift_date)
-        else:
-            q = q.eq("shift_date", date.today().isoformat())
-        res = q.order("shift_date").execute()
-        return _safe_data(res)
+        target_date = shift_date or date.today().isoformat()
+        res = (
+            supabase.table("shift_days")
+            .select(SHIFT_DAY_SELECT_MINIMAL)
+            .eq("shift_date", target_date)
+            .limit(1)
+            .execute()
+        )
+        rows = _safe_data(res)
+        logger.info(f"compat get_shifts: shift_date={target_date} days={len(rows)}")
+        return rows
     except Exception as e:
         logger.error(f"compat get_shifts failed: shift_date={shift_date} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="shifts fetch failed")
@@ -174,8 +191,9 @@ def get_staff_schedules(shift_date: str):
     try:
         res = (
             supabase.table("shift_days")
-            .select("*, shift_entries(*, staff_members(*))")
+            .select(SHIFT_DAY_SELECT_MINIMAL)
             .eq("shift_date", shift_date)
+            .limit(1)
             .execute()
         )
         day = res.data[0] if res.data else None
@@ -211,14 +229,14 @@ def get_shift_board(year: int, month: int):
 
         shift_res = (
             supabase.table("shift_days")
-            .select("*, shift_entries(*, staff_members(*))")
+            .select(SHIFT_BOARD_SELECT_MINIMAL)
             .gte("shift_date", start_iso)
             .lt("shift_date", end_iso)
             .order("shift_date")
             .execute()
         )
 
-        task_rows = _fetch_all_cleaning_tasks_for_count()
+        task_rows = _fetch_cleaning_tasks_for_month_count(start_iso, end_iso)
 
         cleaning_counts: dict[str, int] = {}
         workload_score: dict[str, int] = {}
@@ -234,7 +252,6 @@ def get_shift_board(year: int, month: int):
                 continue
 
             cleaning_counts[d] = cleaning_counts.get(d, 0) + 1
-            # 物件点数移行後は cleaning_tasks 側に load_score が無い可能性があるため、ここでは0にする。
             workload_score[d] = workload_score.get(d, 0) + int(row.get("load_score") or 0)
 
         attendance_counts: dict[str, int] = {}
