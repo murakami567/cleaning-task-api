@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.db import supabase
 from app.logger import get_logger
-from app.services.auth_service import get_current_user
 
 router = APIRouter(tags=["tasks"])
 logger = get_logger(__name__)
@@ -38,6 +38,18 @@ def _normalize_non_cleaning_row(row: dict):
     if row["status"] not in NON_CLEANING_STATUS_VALUES:
         row["status"] = "未着手"
     return row
+
+
+def _extract_task_id(body: Any = None, task_id: str | None = None, id: str | None = None) -> str:
+    if task_id:
+        return str(task_id).strip()
+    if id:
+        return str(id).strip()
+    if isinstance(body, dict):
+        return str(body.get("task_id") or body.get("id") or body.get("non_cleaning_task_id") or "").strip()
+    if isinstance(body, str):
+        return body.strip()
+    return ""
 
 
 def _auto_progress_started_tasks():
@@ -346,13 +358,42 @@ def update_non_cleaning_task(
     return {"ok": True, "task_id": task_id, "updated": payload, "data": [_normalize_non_cleaning_row(row) for row in (res.data or [])]}
 
 
-@router.post("/non-cleaning-tasks/delete")
-def delete_non_cleaning_task(task_id: str = Body(...)):
+def _delete_non_cleaning_task(task_id: str):
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
+
     try:
+        exists = supabase.table("non_cleaning_tasks").select("id").eq("id", task_id).limit(1).execute()
+        if not exists.data:
+            logger.warning(f"delete_non_cleaning_task target not found: task_id={task_id}")
+            return {"ok": True, "task_id": task_id, "deleted": 0, "message": "already deleted or not found"}
+
         res = supabase.table("non_cleaning_tasks").delete().eq("id", task_id).execute()
     except Exception as e:
         logger.error(f"delete_non_cleaning_task failed: task_id={task_id} {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="非清掃タスク削除に失敗しました。")
-    return {"ok": True, "task_id": task_id, "data": res.data or []}
+        raise HTTPException(status_code=500, detail=f"非清掃タスク削除に失敗しました: {str(e)}")
+
+    logger.info(f"delete_non_cleaning_task: task_id={task_id} deleted_count={len(res.data or [])}")
+    return {"ok": True, "task_id": task_id, "deleted": len(res.data or []), "data": res.data or []}
+
+
+@router.post("/non-cleaning-tasks/delete")
+def delete_non_cleaning_task_post(
+    body: Any = Body(default=None),
+    task_id: str | None = Query(default=None),
+    id: str | None = Query(default=None),
+):
+    return _delete_non_cleaning_task(_extract_task_id(body=body, task_id=task_id, id=id))
+
+
+@router.delete("/non-cleaning-tasks/{task_id}")
+def delete_non_cleaning_task_by_path(task_id: str):
+    return _delete_non_cleaning_task(task_id)
+
+
+@router.delete("/non-cleaning-tasks")
+def delete_non_cleaning_task_delete(
+    task_id: str | None = Query(default=None),
+    id: str | None = Query(default=None),
+):
+    return _delete_non_cleaning_task(_extract_task_id(task_id=task_id, id=id))
