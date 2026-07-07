@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
@@ -53,6 +54,32 @@ def _normalize_task_color(value: str | None) -> str:
     if not COLOR_PATTERN.match(color):
         raise HTTPException(status_code=400, detail="task_color must be #RRGGBB format")
     return color.lower()
+
+
+def _normalize_reorder_items(items: Any) -> list[dict[str, int | str]]:
+    if isinstance(items, dict):
+        items = items.get("items") or items.get("properties") or items.get("orders") or []
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items must be a list")
+
+    normalized = []
+    seen_ids = set()
+    for index, row in enumerate(items):
+        if not isinstance(row, dict):
+            raise HTTPException(status_code=400, detail="each item must be an object")
+        property_id = str(row.get("id") or row.get("property_id") or "").strip()
+        if not property_id:
+            raise HTTPException(status_code=400, detail="property_id is required")
+        if property_id in seen_ids:
+            continue
+        seen_ids.add(property_id)
+        sort_order = row.get("sort_order")
+        try:
+            sort_order = int(sort_order if sort_order is not None else index + 1)
+        except Exception:
+            sort_order = index + 1
+        normalized.append({"property_id": property_id, "sort_order": sort_order})
+    return normalized
 
 
 @router.post("/properties/create")
@@ -144,7 +171,33 @@ def update_property(
             .execute()
         )
     except Exception as e:
-        logger.error(f"update_property failed: property_id={property_id} {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="property update failed")
+        logger.error(f"update_property failed: property_id={property_id} payload={payload} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"property update failed: {str(e)}")
 
     return {"ok": True, "property_id": property_id, "updated": payload, "data": res.data}
+
+
+@router.post("/properties/reorder")
+def reorder_properties(
+    body: Any = Body(...),
+    current_user: dict = Depends(require_admin_write),
+):
+    items = _normalize_reorder_items(body)
+    if not items:
+        raise HTTPException(status_code=400, detail="items is empty")
+
+    updated = []
+    try:
+        for item in items:
+            res = (
+                supabase.table("properties")
+                .update({"sort_order": item["sort_order"]})
+                .eq("id", item["property_id"])
+                .execute()
+            )
+            updated.extend(res.data or [])
+    except Exception as e:
+        logger.error(f"reorder_properties failed: items={items} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"property reorder failed: {str(e)}")
+
+    return {"ok": True, "count": len(items), "updated": updated}
