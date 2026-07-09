@@ -50,8 +50,8 @@ class PortalScheduleBody(BaseModel):
 
 
 def _get_order_supabase():
-    order_url = os.getenv("ORDER_SUPABASE_URL") or os.getenv("SUPABASE_URL")
-    order_key = os.getenv("ORDER_SUPABASE_SERVICE_KEY") or os.getenv("ORDER_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
+    order_url = os.getenv("ORDER_SUPABASE_URL")
+    order_key = os.getenv("ORDER_SUPABASE_SERVICE_KEY")
     if not order_url or not order_key:
         raise RuntimeError("ORDER_SUPABASE_URL / ORDER_SUPABASE_SERVICE_KEY が未設定です。")
     return create_client(order_url, order_key)
