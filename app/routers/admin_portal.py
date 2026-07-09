@@ -1,6 +1,8 @@
 from datetime import date, datetime, timedelta, timezone
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from supabase import create_client
 
 from app.db import supabase
 from app.logger import get_logger
@@ -45,6 +47,14 @@ class PortalScheduleBody(BaseModel):
     assignee_names: list[str] = []
     title: str
     description: str = ""
+
+
+def _get_order_supabase():
+    order_url = os.getenv("ORDER_SUPABASE_URL") or os.getenv("SUPABASE_URL")
+    order_key = os.getenv("ORDER_SUPABASE_SERVICE_KEY") or os.getenv("ORDER_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
+    if not order_url or not order_key:
+        raise RuntimeError("ORDER_SUPABASE_URL / ORDER_SUPABASE_SERVICE_KEY が未設定です。")
+    return create_client(order_url, order_key)
 
 
 def _get_today_attendance_map(today: str) -> dict[str, dict]:
@@ -210,6 +220,56 @@ def get_admin_home(current_user: dict = Depends(require_admin_or_leader)):
             for row in (on_break_res.data or [])
         ],
     }
+
+
+@router.get("/order-due-schedules")
+def get_order_due_schedules(
+    year: int,
+    month: int,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    month_start = date(year, month, 1)
+    if month == 12:
+        month_end = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        month_end = date(year, month + 1, 1) - timedelta(days=1)
+
+    try:
+        order_supabase = _get_order_supabase()
+        res = (
+            order_supabase
+            .table("orders")
+            .select("id,order_no,status,item_name,quantity,unit,usage_place,delivery_place,supplier,due_date")
+            .gte("due_date", month_start.isoformat())
+            .lte("due_date", month_end.isoformat())
+            .neq("status", "キャンセル")
+            .order("due_date")
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_order_due_schedules failed: year={year} month={month} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="発注納期の取得に失敗しました。")
+
+    items = []
+    for row in res.data or []:
+        due_date = _date_key(row.get("due_date"))
+        if not due_date:
+            continue
+        items.append({
+            "id": str(row.get("id") or ""),
+            "order_no": row.get("order_no") or "",
+            "status": row.get("status") or "",
+            "item_name": row.get("item_name") or "",
+            "quantity": row.get("quantity"),
+            "unit": row.get("unit"),
+            "usage_place": row.get("usage_place"),
+            "delivery_place": row.get("delivery_place"),
+            "supplier": row.get("supplier"),
+            "due_date": due_date,
+        })
+
+    logger.info(f"get_order_due_schedules: year={year} month={month} count={len(items)}")
+    return {"items": items}
 
 
 @router.get("/prep-list")
