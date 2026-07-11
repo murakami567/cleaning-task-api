@@ -8,6 +8,7 @@ from app.routers.task_times import router as task_times_router
 from app.routers.facility_property_override import router as facility_property_router
 from app.routers.facility_trouble import router as facility_trouble_router
 from app.routers.tasks import router as tasks_router
+from app.routers.order_management_sync import router as order_management_sync_router
 from app.routers.beds24 import router as beds24_router
 from app.routers.auth import router as auth_router
 from app.routers.employee_tasks_override import router as employee_tasks_router
@@ -59,6 +60,7 @@ app.include_router(task_times_router)
 app.include_router(facility_property_router)
 app.include_router(facility_trouble_router)
 app.include_router(tasks_router)
+app.include_router(order_management_sync_router)
 app.include_router(beds24_router)
 app.include_router(auth_router)
 app.include_router(employee_tasks_router)
