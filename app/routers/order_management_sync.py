@@ -15,12 +15,19 @@ def _normalize_row(row: dict) -> dict:
     return value
 
 
+def _normalize_category(category: str | None) -> str:
+    value = str(category or "").strip()
+    if value in {"荷受け", "LINEN"}:
+        return "LINEN"
+    return value or "OTHER"
+
+
 @router.post("/integrations/order-management/non-cleaning-task-sync")
 def sync_order_management_task(
     source_order_id: str = Body(...),
     task_id: str | None = Body(None),
     task_date: str = Body(...),
-    category: str = Body("荷受け"),
+    category: str = Body("LINEN"),
     title: str = Body(...),
     deadline: str | None = Body(None),
     note: str = Body(""),
@@ -34,7 +41,7 @@ def sync_order_management_task(
 
     payload = {
         "task_date": task_date,
-        "category": category or "荷受け",
+        "category": _normalize_category(category),
         "title": title.strip(),
         "deadline": deadline or task_date,
         "note": note,
