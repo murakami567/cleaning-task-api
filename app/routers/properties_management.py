@@ -56,6 +56,10 @@ def _normalize_task_color(value: str | None) -> str:
     return color.lower()
 
 
+def _text(value) -> str:
+    return str(value or "").strip()
+
+
 def _normalize_reorder_items(items: Any) -> list[dict[str, int | str]]:
     if isinstance(items, dict):
         items = items.get("items") or items.get("properties") or items.get("orders") or []
@@ -93,6 +97,8 @@ def create_property(
     assignment_mode: str | None = Body("solo"),
     cleaning_point: int | None = Body(60),
     task_color: str | None = Body("#ffffff"),
+    address: str | None = Body(None),
+    google_maps_url: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {
@@ -105,6 +111,8 @@ def create_property(
         "assignment_mode": _normalize_assignment_mode(assignment_mode),
         "cleaning_point": _normalize_cleaning_point(cleaning_point),
         "task_color": _normalize_task_color(task_color),
+        "address": _text(address),
+        "google_maps_url": _text(google_maps_url),
     }
 
     if not payload["property_code"]:
@@ -135,6 +143,8 @@ def update_property(
     assignment_mode: str | None = Body(None),
     cleaning_point: int | None = Body(None),
     task_color: str | None = Body(None),
+    address: str | None = Body(None),
+    google_maps_url: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {}
@@ -157,6 +167,10 @@ def update_property(
         payload["cleaning_point"] = _normalize_cleaning_point(cleaning_point)
     if task_color is not None:
         payload["task_color"] = _normalize_task_color(task_color)
+    if address is not None:
+        payload["address"] = _text(address)
+    if google_maps_url is not None:
+        payload["google_maps_url"] = _text(google_maps_url)
 
     if not property_id:
         raise HTTPException(status_code=400, detail="property_id is required")
