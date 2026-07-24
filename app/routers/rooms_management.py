@@ -46,6 +46,7 @@ def create_room(
     cleaning_score: int | None = Body(None),
     keybox_number: str | None = Body(None),
     spare_key_number: str | None = Body(None),
+    mailbox_number: str | None = Body(None),
     note: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
@@ -75,6 +76,7 @@ def create_room(
         "prep_ta": _int_or_default(prep_ta, 0),
         "keybox_number": _text(keybox_number),
         "spare_key_number": _text(spare_key_number),
+        "mailbox_number": _text(mailbox_number),
         "note": _text(note),
     }
     if cleaning_score is not None:
@@ -144,6 +146,7 @@ def bulk_create_rooms(
             "prep_ta": 0,
             "keybox_number": "",
             "spare_key_number": "",
+            "mailbox_number": "",
             "note": "",
         })
 
@@ -174,6 +177,7 @@ def update_room(
     cleaning_score: int | None = Body(None),
     keybox_number: str | None = Body(None),
     spare_key_number: str | None = Body(None),
+    mailbox_number: str | None = Body(None),
     note: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
@@ -208,6 +212,8 @@ def update_room(
         payload["keybox_number"] = _text(keybox_number)
     if spare_key_number is not None:
         payload["spare_key_number"] = _text(spare_key_number)
+    if mailbox_number is not None:
+        payload["mailbox_number"] = _text(mailbox_number)
     if note is not None:
         payload["note"] = _text(note)
 
