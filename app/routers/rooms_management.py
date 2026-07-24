@@ -44,6 +44,9 @@ def create_room(
     prep_spare_s: int | None = Body(0),
     prep_ta: int | None = Body(0),
     cleaning_score: int | None = Body(None),
+    keybox_number: str | None = Body(None),
+    spare_number: str | None = Body(None),
+    room_note: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     property_id = _text(property_id)
@@ -70,6 +73,9 @@ def create_room(
         "prep_s": _int_or_default(prep_s, 0),
         "prep_spare_s": _int_or_default(prep_spare_s, 0),
         "prep_ta": _int_or_default(prep_ta, 0),
+        "keybox_number": _text(keybox_number),
+        "spare_number": _text(spare_number),
+        "room_note": _text(room_note),
     }
     if cleaning_score is not None:
         payload["cleaning_score"] = _score(cleaning_score)
@@ -136,6 +142,9 @@ def bulk_create_rooms(
             "prep_s": 0,
             "prep_spare_s": 0,
             "prep_ta": 0,
+            "keybox_number": "",
+            "spare_number": "",
+            "room_note": "",
         })
 
     try:
@@ -163,6 +172,9 @@ def update_room(
     prep_spare_s: int | None = Body(None),
     prep_ta: int | None = Body(None),
     cleaning_score: int | None = Body(None),
+    keybox_number: str | None = Body(None),
+    spare_number: str | None = Body(None),
+    room_note: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {}
@@ -192,6 +204,12 @@ def update_room(
         payload["prep_ta"] = prep_ta
     if cleaning_score is not None:
         payload["cleaning_score"] = _score(cleaning_score)
+    if keybox_number is not None:
+        payload["keybox_number"] = _text(keybox_number)
+    if spare_number is not None:
+        payload["spare_number"] = _text(spare_number)
+    if room_note is not None:
+        payload["room_note"] = _text(room_note)
 
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
