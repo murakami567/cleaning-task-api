@@ -47,6 +47,8 @@ def create_room(
     keybox_number: str | None = Body(None),
     spare_key_number: str | None = Body(None),
     mailbox_number: str | None = Body(None),
+    wifi_ssid: str | None = Body(None),
+    wifi_password: str | None = Body(None),
     note: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
@@ -77,6 +79,8 @@ def create_room(
         "keybox_number": _text(keybox_number),
         "spare_key_number": _text(spare_key_number),
         "mailbox_number": _text(mailbox_number),
+        "wifi_ssid": _text(wifi_ssid),
+        "wifi_password": _text(wifi_password),
         "note": _text(note),
     }
     if cleaning_score is not None:
@@ -147,6 +151,8 @@ def bulk_create_rooms(
             "keybox_number": "",
             "spare_key_number": "",
             "mailbox_number": "",
+            "wifi_ssid": "",
+            "wifi_password": "",
             "note": "",
         })
 
@@ -178,6 +184,8 @@ def update_room(
     keybox_number: str | None = Body(None),
     spare_key_number: str | None = Body(None),
     mailbox_number: str | None = Body(None),
+    wifi_ssid: str | None = Body(None),
+    wifi_password: str | None = Body(None),
     note: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
@@ -214,6 +222,10 @@ def update_room(
         payload["spare_key_number"] = _text(spare_key_number)
     if mailbox_number is not None:
         payload["mailbox_number"] = _text(mailbox_number)
+    if wifi_ssid is not None:
+        payload["wifi_ssid"] = _text(wifi_ssid)
+    if wifi_password is not None:
+        payload["wifi_password"] = _text(wifi_password)
     if note is not None:
         payload["note"] = _text(note)
 
