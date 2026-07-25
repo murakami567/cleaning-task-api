@@ -99,6 +99,7 @@ def create_property(
     task_color: str | None = Body("#ffffff"),
     address: str | None = Body(None),
     google_maps_url: str | None = Body(None),
+    entrance_number: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {
@@ -113,6 +114,7 @@ def create_property(
         "task_color": _normalize_task_color(task_color),
         "address": _text(address),
         "google_maps_url": _text(google_maps_url),
+        "entrance_number": _text(entrance_number),
     }
 
     if not payload["property_code"]:
@@ -145,6 +147,7 @@ def update_property(
     task_color: str | None = Body(None),
     address: str | None = Body(None),
     google_maps_url: str | None = Body(None),
+    entrance_number: str | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {}
@@ -171,6 +174,8 @@ def update_property(
         payload["address"] = _text(address)
     if google_maps_url is not None:
         payload["google_maps_url"] = _text(google_maps_url)
+    if entrance_number is not None:
+        payload["entrance_number"] = _text(entrance_number)
 
     if not property_id:
         raise HTTPException(status_code=400, detail="property_id is required")
