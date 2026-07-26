@@ -15,6 +15,7 @@ from app.routers.employee_tasks_override import router as employee_tasks_router
 from app.routers.employee import router as employee_router
 from app.routers.admin_home_active_override import router as admin_home_active_router
 from app.routers.admin_portal_home_override import router as admin_portal_home_override_router
+from app.routers.admin_portal_prep_list_override import router as admin_portal_prep_list_override_router
 from app.routers.admin_portal import router as admin_portal_router
 from app.routers.admin_portal_construction_proxy import router as admin_portal_construction_proxy_router
 from app.routers.jinjer_sync_override import router as jinjer_sync_override_router
@@ -68,6 +69,7 @@ app.include_router(employee_tasks_router)
 app.include_router(employee_router)
 app.include_router(admin_home_active_router)
 app.include_router(admin_portal_home_override_router)
+app.include_router(admin_portal_prep_list_override_router)
 app.include_router(admin_portal_router)
 app.include_router(admin_portal_construction_proxy_router)
 app.include_router(jinjer_sync_override_router)
