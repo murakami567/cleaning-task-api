@@ -13,9 +13,12 @@ PROPERTY_LIST_FIELDS = (
     "google_maps_url,entrance_number"
 )
 
+# 管理画面では従来どおり鍵番号・Wi-Fi情報を一覧に含める。
+# このAPI自体は admin / sub_admin / leader の認証必須。
 ROOM_LIST_FIELDS = (
     "id,property_id,room_name,room_code,room_key,normalized_room_key,capacity,"
-    "room_sort_order,is_active,prep_d,prep_s,prep_spare_s,prep_ta,cleaning_score,note"
+    "room_sort_order,is_active,prep_d,prep_s,prep_spare_s,prep_ta,cleaning_score,"
+    "keybox_number,spare_key_number,mailbox_number,wifi_ssid,wifi_password,note"
 )
 
 ROOM_CREDENTIAL_FIELDS = (
