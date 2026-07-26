@@ -45,30 +45,47 @@ def _date_key(value: Any) -> str:
 
 
 def _fetch_cleaning_tasks_for_month_count(start_iso: str, end_iso: str) -> list[dict[str, Any]]:
-    """shift-board 用。全件取得をやめて対象月だけ取得する。"""
-    try:
-        res = (
-            supabase.table("cleaning_tasks")
-            .select("id, task_date, checkout_date, status, load_score")
-            .gte("task_date", start_iso)
-            .lt("task_date", end_iso)
-            .order("task_date")
-            .limit(5000)
-            .execute()
-        )
-        return res.data or []
-    except Exception as e:
-        logger.warning(f"cleaning task month count with load_score failed: {e}")
-        res = (
-            supabase.table("cleaning_tasks")
-            .select("id, task_date, checkout_date, status")
-            .gte("task_date", start_iso)
-            .lt("task_date", end_iso)
-            .order("task_date")
-            .limit(5000)
-            .execute()
-        )
-        return res.data or []
+    """シフト表の総清掃数用。Supabase の1000件上限を避けて対象月を全件取得する。"""
+    rows: list[dict[str, Any]] = []
+    page_size = 1000
+    offset = 0
+
+    while True:
+        try:
+            query = (
+                supabase.table("cleaning_tasks")
+                .select("id, task_date, checkout_date, status, load_score")
+                .gte("task_date", start_iso)
+                .lt("task_date", end_iso)
+                .order("task_date")
+                .order("id")
+                .range(offset, offset + page_size - 1)
+            )
+            res = query.execute()
+        except Exception as e:
+            logger.warning(f"cleaning task month count with load_score failed: offset={offset} {e}")
+            res = (
+                supabase.table("cleaning_tasks")
+                .select("id, task_date, checkout_date, status")
+                .gte("task_date", start_iso)
+                .lt("task_date", end_iso)
+                .order("task_date")
+                .order("id")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+
+        batch = res.data or []
+        rows.extend(batch)
+
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    logger.info(
+        f"shift board cleaning task fetch: start={start_iso} end={end_iso} rows={len(rows)}"
+    )
+    return rows
 
 
 @router.get("/properties")
@@ -240,14 +257,14 @@ def get_shift_board(year: int, month: int):
 
         cleaning_counts: dict[str, int] = {}
         workload_score: dict[str, int] = {}
-        excluded_statuses = {"CXL", "キャンセル", "cancelled", "Cancelled"}
+        excluded_statuses = {"cxl", "キャンセル", "cancelled", "canceled"}
 
         for row in task_rows:
-            status = str(row.get("status") or "")
+            status = str(row.get("status") or "").strip().lower()
             if status in excluded_statuses:
                 continue
 
-            d = _date_key(row.get("task_date") or row.get("checkout_date"))
+            d = _date_key(row.get("task_date"))
             if not d or d < start_iso or d >= end_iso:
                 continue
 
