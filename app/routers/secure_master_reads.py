@@ -23,8 +23,7 @@ ROOM_CREDENTIAL_FIELDS = (
 )
 
 
-@router.get("/admin/master/properties")
-def get_secure_properties(current_user: dict = Depends(require_admin_or_leader)):
+def _fetch_properties():
     try:
         res = (
             supabase.table("properties")
@@ -39,11 +38,7 @@ def get_secure_properties(current_user: dict = Depends(require_admin_or_leader))
         raise HTTPException(status_code=500, detail="物件一覧の取得に失敗しました。")
 
 
-@router.get("/admin/master/rooms")
-def get_secure_rooms(
-    property_id: str | None = None,
-    current_user: dict = Depends(require_admin_or_leader),
-):
+def _fetch_rooms(property_id: str | None = None):
     try:
         query = supabase.table("rooms").select(ROOM_LIST_FIELDS)
         if property_id:
@@ -53,6 +48,34 @@ def get_secure_rooms(
     except Exception as e:
         logger.error(f"secure room fetch failed: property_id={property_id} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="部屋一覧の取得に失敗しました。")
+
+
+# Existing front-end compatibility paths. This router is registered before compat.py,
+# so unauthenticated legacy handlers cannot expose master data.
+@router.get("/properties")
+def get_properties(current_user: dict = Depends(require_admin_or_leader)):
+    return _fetch_properties()
+
+
+@router.get("/rooms")
+def get_rooms(
+    property_id: str | None = None,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    return _fetch_rooms(property_id)
+
+
+@router.get("/admin/master/properties")
+def get_secure_properties(current_user: dict = Depends(require_admin_or_leader)):
+    return _fetch_properties()
+
+
+@router.get("/admin/master/rooms")
+def get_secure_rooms(
+    property_id: str | None = None,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    return _fetch_rooms(property_id)
 
 
 @router.get("/admin/master/rooms/{room_id}/credentials")
