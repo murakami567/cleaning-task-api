@@ -50,21 +50,6 @@ def _fetch_rooms(property_id: str | None = None):
         raise HTTPException(status_code=500, detail="部屋一覧の取得に失敗しました。")
 
 
-# Existing front-end compatibility paths. This router is registered before compat.py,
-# so unauthenticated legacy handlers cannot expose master data.
-@router.get("/properties")
-def get_properties(current_user: dict = Depends(require_admin_or_leader)):
-    return _fetch_properties()
-
-
-@router.get("/rooms")
-def get_rooms(
-    property_id: str | None = None,
-    current_user: dict = Depends(require_admin_or_leader),
-):
-    return _fetch_rooms(property_id)
-
-
 @router.get("/admin/master/properties")
 def get_secure_properties(current_user: dict = Depends(require_admin_or_leader)):
     return _fetch_properties()
