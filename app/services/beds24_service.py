@@ -8,6 +8,9 @@ import requests
 from fastapi import HTTPException
 
 from app.db import supabase
+from app.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 BEDS24_CSV_URL = os.getenv("BEDS24_CSV_URL", "https://www.beds24.com/api/csv/getbookingscsv")
@@ -344,6 +347,41 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 "booking_id": payload["booking_id"],
             })
 
+    # 5. 孤児行の削除
+    # Beds24 で予約が再作成・削除されると、CSV に出てこなくなった booking_id の
+    # cleaning_tasks 行が孤児として残り、同日同部屋の重複表示の原因になる。
+    # 同期対象期間に限定して、今回の CSV に含まれない beds24_csv 起源の行を削除する。
+    orphan_deleted_count = 0
+    synced_booking_ids = {r["booking_id"] for r in final_records}
+
+    if synced_booking_ids:
+        try:
+            existing_res = (
+                supabase.table("cleaning_tasks")
+                .select("id, booking_id")
+                .eq("source", "beds24_csv")
+                .gte("task_date", start_date_str)
+                .lte("task_date", end_date_str)
+                .execute()
+            )
+
+            orphan_ids = [
+                row["id"]
+                for row in (existing_res.data or [])
+                if row.get("booking_id") not in synced_booking_ids
+            ]
+
+            if orphan_ids:
+                supabase.table("cleaning_tasks").delete().in_("id", orphan_ids).execute()
+                orphan_deleted_count = len(orphan_ids)
+
+            logger.info(
+                f"orphan cleanup: from={start_date_str} to={end_date_str} "
+                f"existing={len(existing_res.data or [])} deleted={orphan_deleted_count}"
+            )
+        except Exception as e:
+            logger.error(f"orphan cleanup failed: {e}", exc_info=True)
+
     return {
         "ok": True,
         "from": start_date_str,
@@ -351,6 +389,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
         "csv_row_count": len(csv_rows) - 1,
         "cleaning_saved_count": len(cleaning_saved),
         "skipped_count": len(skipped),
+        "orphan_deleted_count": orphan_deleted_count,
         "cleaning_saved": cleaning_saved[:20],
         "skipped": skipped[:50],
     }
