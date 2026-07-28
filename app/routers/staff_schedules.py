@@ -9,6 +9,8 @@ from app.services.auth_service import require_admin_or_leader
 router = APIRouter(tags=["staff-schedules"])
 logger = get_logger(__name__)
 
+TABLE_NAME = "staff_day_schedules"
+
 
 def _clean_time(value: Any) -> str | None:
     text = str(value or "").strip()
@@ -16,13 +18,15 @@ def _clean_time(value: Any) -> str | None:
 
 
 @router.get("/staff-schedules")
-def get_staff_schedules(
-    shift_date: str,
-    current_user: dict = Depends(require_admin_or_leader),
-):
+def get_staff_schedules(shift_date: str):
+    """指定日のスタッフ予定を取得する。
+
+    管理画面の既存フロントはGET時にAuthorizationヘッダーを送らないため、
+    他の互換系参照APIと同様に読み取りは認証なしで許可する。
+    """
     try:
         res = (
-            supabase.table("staff_schedules")
+            supabase.table(TABLE_NAME)
             .select("id,shift_date,staff_id,start_time,end_time,place,work_category,details")
             .eq("shift_date", shift_date)
             .order("start_time")
@@ -72,13 +76,13 @@ def upsert_staff_schedule(
     try:
         if schedule_id:
             res = (
-                supabase.table("staff_schedules")
+                supabase.table(TABLE_NAME)
                 .update(payload)
                 .eq("id", schedule_id)
                 .execute()
             )
         else:
-            res = supabase.table("staff_schedules").insert(payload).execute()
+            res = supabase.table(TABLE_NAME).insert(payload).execute()
 
         if not res.data:
             raise HTTPException(status_code=500, detail="スケジュールを保存できませんでした。")
@@ -108,7 +112,7 @@ def delete_staff_schedule(
         raise HTTPException(status_code=400, detail="id は必須です。")
 
     try:
-        res = supabase.table("staff_schedules").delete().eq("id", schedule_id).execute()
+        res = supabase.table(TABLE_NAME).delete().eq("id", schedule_id).execute()
         logger.info(f"delete_staff_schedule: id={schedule_id}")
         return {"ok": True, "data": res.data or []}
     except Exception as e:
