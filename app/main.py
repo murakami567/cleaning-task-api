@@ -27,6 +27,7 @@ from app.routers.mate_carte import router as mate_carte_router
 from app.routers.backups import router as backups_router
 from app.routers.monthly_reports import router as monthly_reports_router
 from app.routers.auto_assign_300pt import router as auto_assign_router
+from app.routers.staff_schedules import router as staff_schedules_router
 from app.routers.compat import router as compat_router
 from app.routers.properties_management import router as properties_management_router
 from app.routers.rooms_management import router as rooms_management_router
@@ -82,6 +83,7 @@ app.include_router(backups_router)
 app.include_router(monthly_reports_router)
 app.include_router(auto_assign_router)
 app.include_router(secure_master_reads_router)
+app.include_router(staff_schedules_router)
 app.include_router(compat_router)
 app.include_router(properties_management_router)
 app.include_router(rooms_management_router)
