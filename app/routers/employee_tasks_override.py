@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
@@ -10,6 +10,8 @@ from app.services.auth_service import get_current_user_id
 
 router = APIRouter(prefix="/api/employee", tags=["employee"])
 logger = get_logger(__name__)
+
+CHECK_STATUS_VALUES = {"未着手", "チェック完了", "CXL"}
 
 
 @router.get("/tasks")
@@ -74,6 +76,69 @@ def get_tasks_with_checklist(user_id: str = Depends(get_current_user_id)):
             "checkTodayCount": count_today(check_tasks),
         },
     }
+
+
+@router.post("/check-tasks/update")
+def update_check_task_status(
+    task_id: str = Body(...),
+    status: str = Body(...),
+    note: str | None = Body(None),
+    user_id: str = Depends(get_current_user_id),
+):
+    normalized_status = str(status or "").strip()
+    if normalized_status not in CHECK_STATUS_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail="チェックタスクのステータスは 未着手・チェック完了・CXL のみ指定できます。",
+        )
+
+    try:
+        staff_res = (
+            supabase.table("staff_members")
+            .select("staff_name")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        staff_name = staff_res.data[0].get("staff_name") if staff_res.data else ""
+        if not staff_name:
+            raise HTTPException(status_code=403, detail="チェッカー情報を確認できません。")
+
+        task_res = (
+            supabase.table("cleaning_tasks")
+            .select("id, checker_name")
+            .eq("id", task_id)
+            .limit(1)
+            .execute()
+        )
+        if not task_res.data:
+            raise HTTPException(status_code=404, detail="チェックタスクが見つかりません。")
+        if (task_res.data[0].get("checker_name") or "") != staff_name:
+            raise HTTPException(status_code=403, detail="このチェックタスクを更新する権限がありません。")
+
+        payload: dict[str, Any] = {"status": normalized_status, "cleaning_started_at": None}
+        if note is not None:
+            payload["note"] = note
+
+        update_res = (
+            supabase.table("cleaning_tasks")
+            .update(payload)
+            .eq("id", task_id)
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"update_check_task_status failed: user_id={user_id} task_id={task_id} {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="チェックタスクの更新に失敗しました。")
+
+    logger.info(
+        f"update_check_task_status: user_id={user_id} task_id={task_id} status={normalized_status}"
+    )
+    return {"ok": True, "task_id": task_id, "updated": payload, "data": update_res.data}
 
 
 def map_cleaning_task(row: dict[str, Any], task_kind: str):
