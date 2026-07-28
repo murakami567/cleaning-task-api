@@ -227,6 +227,51 @@ def get_staff_schedules(shift_date: str):
         raise HTTPException(status_code=500, detail="staff schedules fetch failed")
 
 
+@router.post("/staff-schedules/upsert")
+def upsert_staff_schedule(body: dict[str, Any] = Body(...)):
+    """旧フロント互換。日付から shift_day を作成し、対象スタッフの予定を更新する。"""
+    shift_date = _date_key(body.get("shift_date") or body.get("date") or body.get("work_date"))
+    staff_id = str(body.get("staff_id") or body.get("user_id") or "").strip()
+    if not shift_date:
+        raise HTTPException(status_code=400, detail="shift_date is required")
+    if not staff_id:
+        raise HTTPException(status_code=400, detail="staff_id is required")
+
+    status = str(body.get("status") or body.get("schedule_status") or "出勤")
+    start_time = body.get("start_time")
+    end_time = body.get("end_time")
+    assigned_area = body.get("assigned_area") or body.get("area") or ""
+    note = body.get("note") or ""
+
+    try:
+        day = get_or_create_shift_day(shift_date=shift_date, note="")
+        shift_day_id = str(day.get("id") or "")
+        if not shift_day_id:
+            raise HTTPException(status_code=500, detail="shift day id missing")
+
+        result = upsert_shift_entry(
+            shift_day_id=shift_day_id,
+            staff_id=staff_id,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            assigned_area=assigned_area,
+            note=note,
+        )
+        logger.info(
+            f"compat upsert_staff_schedule: shift_date={shift_date} staff_id={staff_id} status={status}"
+        )
+        return {"ok": True, "shift_date": shift_date, "staff_id": staff_id, "data": result.get("data", [])}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"compat upsert_staff_schedule failed: shift_date={shift_date} staff_id={staff_id} {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="staff schedule upsert failed")
+
+
 @router.get("/shift-board")
 def get_shift_board(year: int, month: int):
     try:
