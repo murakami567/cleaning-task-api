@@ -23,6 +23,10 @@ PROPERTY_ORDER = [
 ]
 
 
+CARRY_OVER_STATUS = "持越"
+CARRY_OVER_RESET_STATUS = "未着手"
+
+
 def format_date_string(dt: date) -> str:
     return dt.strftime("%Y-%m-%d")
 
@@ -153,6 +157,93 @@ def calc_load_score(guest_count: int, gap_nights: int) -> int:
     return score
 
 
+def append_sync_alert(existing_note: str | None, old_next_checkin: str | None, new_next_checkin: str, old_task_date: str) -> str:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    old_next = old_next_checkin or "未設定"
+    alert = (
+        f"【要再割当／Beds24予約変更 {timestamp}】\n"
+        f"次チェックイン: {old_next} → {new_next_checkin}\n"
+        f"清掃日: {old_task_date} → {new_next_checkin}\n"
+        "持越を自動解除し、担当者・チェッカーを解除しました。"
+    )
+    note = str(existing_note or "").strip()
+    return f"{alert}\n\n{note}" if note else alert
+
+
+def apply_carry_over_safety(payload: dict, existing: dict | None):
+    """
+    Beds24再同期で既存の持越設定を壊さないようにする。
+
+    - 持越先が新しい次チェックイン日以前なら、持越日・担当情報を維持する。
+    - 持越先が新しい次チェックイン日より後なら、清掃日を次チェックイン日に戻し、
+      ステータスを未着手にして担当者・チェッカーを解除する。
+    """
+    if not existing or str(existing.get("status") or "").strip() != CARRY_OVER_STATUS:
+        return payload, None
+
+    old_task_date = str(existing.get("task_date") or "").strip()
+    new_next_checkin = str(payload.get("next_checkin_date") or "").strip()
+    old_next_checkin = str(existing.get("next_checkin_date") or "").strip() or None
+
+    # 次チェックインがない、または日付比較ができない場合は持越状態を維持する。
+    if not old_task_date or not new_next_checkin:
+        payload["task_date"] = old_task_date or payload.get("task_date")
+        payload["status"] = CARRY_OVER_STATUS
+        for key in (
+            "assigned_staff_ids", "assigned_staff_names", "assigned_staff_id", "assigned_staff_name",
+            "checker_id", "checker_name", "assignment_locked", "note",
+        ):
+            if key in existing:
+                payload[key] = existing.get(key)
+        return payload, None
+
+    try:
+        carry_date = datetime.fromisoformat(old_task_date).date()
+        next_checkin_date = datetime.fromisoformat(new_next_checkin).date()
+    except Exception:
+        payload["task_date"] = old_task_date
+        payload["status"] = CARRY_OVER_STATUS
+        return payload, None
+
+    if carry_date <= next_checkin_date:
+        # 安全な持越はそのまま維持。予約由来の項目だけ最新化する。
+        payload["task_date"] = old_task_date
+        payload["status"] = CARRY_OVER_STATUS
+        for key in (
+            "assigned_staff_ids", "assigned_staff_names", "assigned_staff_id", "assigned_staff_name",
+            "checker_id", "checker_name", "assignment_locked", "note",
+        ):
+            if key in existing:
+                payload[key] = existing.get(key)
+        return payload, None
+
+    # 持越先が新しいチェックインより後になったため自動補正。
+    payload["task_date"] = new_next_checkin
+    payload["status"] = CARRY_OVER_RESET_STATUS
+    payload["assigned_staff_ids"] = []
+    payload["assigned_staff_names"] = []
+    payload["assigned_staff_id"] = None
+    payload["assigned_staff_name"] = None
+    payload["checker_id"] = None
+    payload["checker_name"] = None
+    payload["assignment_locked"] = False
+    payload["cleaning_started_at"] = None
+    payload["note"] = append_sync_alert(
+        existing.get("note"), old_next_checkin, new_next_checkin, old_task_date
+    )
+
+    return payload, {
+        "booking_id": payload.get("booking_id"),
+        "property_name": payload.get("property_name"),
+        "room_name": payload.get("room_name"),
+        "old_task_date": old_task_date,
+        "new_task_date": new_next_checkin,
+        "old_next_checkin_date": old_next_checkin,
+        "new_next_checkin_date": new_next_checkin,
+        "reason": "carry_over_exceeded_new_next_checkin",
+    }
+
+
 def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = None):
     if not BEDS24_CSV_USERNAME or not BEDS24_CSV_PASSWORD:
         raise HTTPException(
@@ -199,14 +290,17 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
             "to": end_date_str,
             "csv_row_count": 0,
             "cleaning_saved_count": 0,
+            "carry_over_adjusted_count": 0,
             "skipped_count": 0,
             "cleaning_saved": [],
+            "carry_over_adjusted": [],
             "skipped": [],
         }
 
     target_columns = find_target_columns(csv_rows[0])
 
     cleaning_saved = []
+    carry_over_adjusted = []
     skipped = []
 
     # 1. まず予約行を中間配列へ格納
@@ -324,9 +418,19 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 "source": "beds24_csv",
             })
 
-    # 4. DBへupsert
+    # 4. DBへupsert。既存の持越は保護し、予約前倒し時のみ自動補正する。
     for payload in final_records:
         try:
+            existing_res = (
+                supabase.table("cleaning_tasks")
+                .select("*")
+                .eq("booking_id", payload["booking_id"])
+                .limit(1)
+                .execute()
+            )
+            existing = (existing_res.data or [None])[0]
+            payload, adjustment = apply_carry_over_safety(payload, existing)
+
             upsert_res = (
                 supabase.table("cleaning_tasks")
                 .upsert(payload, on_conflict="booking_id")
@@ -337,6 +441,8 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 "booking_id": payload["booking_id"],
                 "count": len(upsert_res.data or []),
             })
+            if adjustment:
+                carry_over_adjusted.append(adjustment)
 
         except Exception as e:
             skipped.append({
@@ -350,7 +456,9 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
         "to": end_date_str,
         "csv_row_count": len(csv_rows) - 1,
         "cleaning_saved_count": len(cleaning_saved),
+        "carry_over_adjusted_count": len(carry_over_adjusted),
         "skipped_count": len(skipped),
         "cleaning_saved": cleaning_saved[:20],
+        "carry_over_adjusted": carry_over_adjusted[:50],
         "skipped": skipped[:50],
     }
