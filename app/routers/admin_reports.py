@@ -35,6 +35,15 @@ class LostItemBody(BaseModel):
     photo_url: str = ""
 
 
+class FacilityReportBody(BaseModel):
+    task_id: str | None = None
+    task_date: str | None = None
+    property_name: str = ""
+    room_name: str = ""
+    description: str
+    photo_url: str = ""
+
+
 def _minutes_between(start_time: str, end_time: str, break_minutes: int) -> int:
     try:
         sh, sm = [int(x) for x in start_time.split(":")[:2]]
@@ -135,6 +144,37 @@ def create_lost_item(
     return {"ok": True, "data": res.data}
 
 
+@employee_router.post("/facility-reports")
+def create_facility_report(
+    payload: FacilityReportBody,
+    user_id: str = Depends(get_current_user_id),
+):
+    if not payload.description.strip():
+        raise HTTPException(status_code=400, detail="description is required")
+    if not payload.photo_url:
+        raise HTTPException(status_code=400, detail="photo_url is required")
+
+    staff = _staff_map([user_id]).get(user_id, {})
+    row = {
+        "task_id": payload.task_id,
+        "task_date": payload.task_date or date.today().isoformat(),
+        "property_name": payload.property_name,
+        "room_name": payload.room_name,
+        "description": payload.description.strip(),
+        "photo_url": payload.photo_url,
+        "reported_by": user_id,
+        "reported_by_name": staff.get("staff_name") or "",
+    }
+
+    try:
+        res = supabase.table("facility_reports").insert(row).execute()
+    except Exception as e:
+        logger.error(f"create_facility_report failed: user_id={user_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="設備トラブル報告の保存に失敗しました。")
+
+    return {"ok": True, "data": res.data}
+
+
 @admin_router.get("/worklogs/today")
 def get_admin_worklogs(
     date: str = Query(default_factory=lambda: date.today().isoformat()),
@@ -223,4 +263,41 @@ def get_admin_lost_items(current_user: dict = Depends(require_admin_or_leader)):
         })
 
     logger.info(f"get_admin_lost_items: count={len(items)} user={current_user.get('user_id')}")
+    return {"items": items}
+
+
+@admin_router.get("/facility-reports")
+def get_admin_facility_reports(current_user: dict = Depends(require_admin_or_leader)):
+    try:
+        res = (
+            supabase.table("facility_reports")
+            .select("*")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_admin_facility_reports failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="設備報告一覧の取得に失敗しました。")
+
+    rows = res.data or []
+    staff_by_id = _staff_map([str(row.get("reported_by") or "") for row in rows])
+
+    items = []
+    for row in rows:
+        reporter_id = str(row.get("reported_by") or "")
+        staff = staff_by_id.get(reporter_id, {})
+        items.append({
+            "id": row.get("id"),
+            "task_id": row.get("task_id"),
+            "task_date": row.get("task_date") or "",
+            "property_name": row.get("property_name") or "",
+            "room_name": row.get("room_name") or "",
+            "description": row.get("description") or "",
+            "photo_url": row.get("photo_url") or "",
+            "reported_by": reporter_id,
+            "reported_by_name": row.get("reported_by_name") or staff.get("staff_name") or "",
+            "created_at": row.get("created_at") or "",
+        })
+
+    logger.info(f"get_admin_facility_reports: count={len(items)} user={current_user.get('user_id')}")
     return {"items": items}
