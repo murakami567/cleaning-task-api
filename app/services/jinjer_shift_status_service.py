@@ -13,102 +13,147 @@ from app.services.jinjer_service import (
 logger = get_logger(__name__)
 
 
-def _first_value(rows: list[dict[str, Any]], keys: list[str]) -> Any:
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        for key in keys:
-            value = row.get(key)
-            if value not in (None, ""):
-                return value
-    return None
+STATUS_KEYS = {
+    "status",
+    "status_name",
+    "schedule_status",
+    "schedule_status_name",
+    "schedule_type",
+    "schedule_type_name",
+    "work_type",
+    "work_type_name",
+    "work_day_type",
+    "work_day_type_name",
+    "day_type",
+    "day_type_name",
+    "holiday",
+    "holiday_name",
+    "holiday_type",
+    "holiday_type_name",
+    "leave",
+    "leave_name",
+    "leave_type",
+    "leave_type_name",
+    "vacation",
+    "vacation_name",
+    "vacation_type",
+    "vacation_type_name",
+    "absence",
+    "absence_name",
+    "attendance_type",
+    "attendance_type_name",
+    "shift_type",
+    "shift_type_name",
+    "work_pattern",
+    "work_pattern_name",
+    "calendar_type",
+    "calendar_type_name",
+    "request_type",
+    "request_type_name",
+    "application_type",
+    "application_type_name",
+}
+
+BOOLEAN_STATUS_KEYS = {
+    "is_holiday": "休み",
+    "holiday_flg": "休み",
+    "holiday_flag": "休み",
+    "is_day_off": "休み",
+    "day_off_flg": "休み",
+    "is_paid_leave": "有給",
+    "paid_leave_flg": "有給",
+    "paid_leave_flag": "有給",
+    "is_legal_holiday": "法定休日",
+    "legal_holiday_flg": "法定休日",
+    "is_prescribed_holiday": "所定休日",
+    "prescribed_holiday_flg": "所定休日",
+}
 
 
-def _text_values(value: Any) -> list[str]:
+def _scalar_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value).strip()
+    return ""
+
+
+def _collect_status_values(value: Any, parent_key: str = "") -> list[str]:
+    """Jinjerレスポンスのネスト階層を問わず、区分判定に使える値を抽出する。"""
     values: list[str] = []
-    if isinstance(value, str):
-        text = value.strip()
-        if text:
-            values.append(text)
-    elif isinstance(value, (int, float, bool)):
-        values.append(str(value))
-    elif isinstance(value, dict):
-        for key in (
-            "name",
-            "label",
-            "title",
-            "display_name",
-            "type_name",
-            "status_name",
-            "holiday_name",
-            "leave_name",
-            "value",
-            "code",
-            "type",
-            "status",
-        ):
-            if key in value:
-                values.extend(_text_values(value.get(key)))
+
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            key = str(raw_key or "").strip().lower()
+
+            if key in BOOLEAN_STATUS_KEYS and child in (True, 1, "1", "true", "True"):
+                values.append(BOOLEAN_STATUS_KEYS[key])
+
+            if key in STATUS_KEYS or any(
+                token in key
+                for token in (
+                    "holiday",
+                    "leave",
+                    "vacation",
+                    "day_off",
+                    "dayoff",
+                    "status",
+                    "work_type",
+                    "schedule_type",
+                    "request_type",
+                    "application_type",
+                )
+            ):
+                scalar = _scalar_text(child)
+                if scalar:
+                    values.append(scalar)
+
+            values.extend(_collect_status_values(child, key))
+
     elif isinstance(value, list):
-        for item in value:
-            values.extend(_text_values(item))
+        for child in value:
+            values.extend(_collect_status_values(child, parent_key))
+
+    elif parent_key in STATUS_KEYS:
+        scalar = _scalar_text(value)
+        if scalar:
+            values.append(scalar)
+
     return values
 
 
 def _extract_schedule_status(entry: dict[str, Any], schedule: dict[str, Any]) -> tuple[str, str]:
-    sources = [entry, schedule]
-    candidate_keys = [
-        "status_name",
-        "status",
-        "schedule_status",
-        "schedule_status_name",
-        "schedule_type",
-        "schedule_type_name",
-        "work_type",
-        "work_type_name",
-        "work_day_type",
-        "work_day_type_name",
-        "day_type",
-        "day_type_name",
-        "holiday",
-        "holiday_name",
-        "holiday_type",
-        "holiday_type_name",
-        "leave",
-        "leave_name",
-        "leave_type",
-        "leave_type_name",
-        "vacation",
-        "vacation_name",
-        "vacation_type",
-        "vacation_type_name",
-        "absence",
-        "absence_name",
-        "attendance_type",
-        "attendance_type_name",
-        "shift_type",
-        "shift_type_name",
-    ]
+    labels = _collect_status_values(entry)
+    if schedule is not entry:
+        labels.extend(_collect_status_values(schedule))
 
-    labels: list[str] = []
-    for source in sources:
-        for key in candidate_keys:
-            if key in source:
-                labels.extend(_text_values(source.get(key)))
+    unique_labels = list(dict.fromkeys(label for label in labels if label))
+    raw_label = " / ".join(unique_labels)
+    compact = (
+        raw_label.replace(" ", "")
+        .replace("　", "")
+        .replace("-", "")
+        .replace("_", "")
+        .lower()
+    )
 
-    raw_label = " / ".join(dict.fromkeys(label for label in labels if label))
-    compact = raw_label.replace(" ", "").replace("　", "").lower()
-
-    if "有給" in compact or "年休" in compact or "paidleave" in compact or "paid_leave" in compact:
+    # 優先順位が重要。「有給休暇」は一般の「休暇」より先、
+    # 「法定休日・所定休日」は一般の「休日」より先に判定する。
+    if any(word in compact for word in ("有給", "有休", "年休", "paidleave", "annualleave")):
         return "有給", raw_label
-    if "法定" in compact or "所定" in compact:
+
+    if any(word in compact for word in ("法定休日", "法定休", "法定", "legalholiday")):
         return "定休", raw_label
-    if (
-        "休み" in compact
-        or "休日" in compact
-        or "公休" in compact
-        or compact in {"休", "off", "dayoff", "day_off"}
-    ):
+
+    if any(word in compact for word in ("所定休日", "所定休", "所定", "prescribedholiday")):
+        return "定休", raw_label
+
+    if any(word in compact for word in ("休み", "休日", "公休", "dayoff")) or compact in {
+        "休",
+        "off",
+    }:
         return "休み", raw_label
 
     return "出勤", raw_label
@@ -122,6 +167,7 @@ def fetch_work_schedules_with_status(month: str) -> list[dict[str, Any]]:
     last_status: int | None = None
     last_text = ""
     tried_shapes: list[dict[str, Any]] = []
+    status_samples: dict[str, list[str]] = {}
 
     while page <= safety_max_pages:
         param_candidates = (
@@ -220,6 +266,11 @@ def fetch_work_schedules_with_status(month: str) -> list[dict[str, Any]]:
                     continue
 
                 status, status_source = _extract_schedule_status(entry, schedule)
+                if status_source:
+                    samples = status_samples.setdefault(status, [])
+                    if status_source not in samples and len(samples) < 5:
+                        samples.append(status_source[:300])
+
                 items.append(
                     {
                         "employee_id": employee_id,
@@ -243,6 +294,6 @@ def fetch_work_schedules_with_status(month: str) -> list[dict[str, Any]]:
     logger.info(
         "jinjer status-aware schedules fetched: "
         f"month={month} pages={page} items={len(items)} statuses={status_counts} "
-        f"params={selected_param_shape}"
+        f"samples={status_samples} params={selected_param_shape}"
     )
     return items
