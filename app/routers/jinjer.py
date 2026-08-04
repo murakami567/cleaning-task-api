@@ -236,8 +236,15 @@ def _parse_shift_cell(value: Any) -> tuple[str | None, str | None, str | None, s
     if not raw:
         return None, None, None, raw
 
-    compact = raw.replace(" ", "")
-    if "休" in compact:
+    compact = raw.replace(" ", "").replace("　", "")
+
+    if "有休" in compact or "有給" in compact or "年休" in compact:
+        return "有給", None, None, raw
+
+    if "法定" in compact or "所定" in compact:
+        return "定休", None, None, raw
+
+    if "休み" in compact or compact in {"休", "休日", "公休"}:
         return "休み", None, None, raw
 
     match = TIME_RANGE_PATTERN.search(raw)
@@ -363,6 +370,7 @@ def _save_shift_items(items: list[dict[str, Any]], source: str) -> dict[str, Any
         existing[(row["shift_day_id"], row["staff_id"])] = row
 
     saved = 0
+    status_counts: dict[str, int] = {}
     errors: list[dict[str, Any]] = []
 
     for it, staff in matched_items:
@@ -371,13 +379,15 @@ def _save_shift_items(items: list[dict[str, Any]], source: str) -> dict[str, Any
         if not staff_id or not shift_day_id:
             continue
 
-        start_time = _normalize_time(it.get("start"))
-        end_time = _normalize_time(it.get("end"))
+        status = str(it.get("status") or "出勤")
+        is_off = status in {"休み", "定休", "有給"}
+        start_time = None if is_off else _normalize_time(it.get("start"))
+        end_time = None if is_off else _normalize_time(it.get("end"))
         prev = existing.get((shift_day_id, staff_id)) or {}
         payload = {
             "shift_day_id": shift_day_id,
             "staff_id": staff_id,
-            "status": it.get("status") or "出勤",
+            "status": status,
             "start_time": start_time,
             "end_time": end_time,
             "assigned_area": prev.get("assigned_area") or "",
@@ -392,6 +402,7 @@ def _save_shift_items(items: list[dict[str, Any]], source: str) -> dict[str, Any
                 if inserted.data:
                     existing[(shift_day_id, staff_id)] = inserted.data[0]
             saved += 1
+            status_counts[status] = status_counts.get(status, 0) + 1
         except Exception as e:
             errors.append({"employee_id": it.get("employee_id"), "date": it.get("date"), "error": str(e)[:200]})
             if len(errors) > 50:
@@ -402,6 +413,7 @@ def _save_shift_items(items: list[dict[str, Any]], source: str) -> dict[str, Any
         "fetched": len(items),
         "matched_staff": len({str(staff.get("id")) for _, staff in matched_items if staff.get("id")}),
         "saved": saved,
+        "status_counts": status_counts,
         "skipped_no_staff": skipped_no_staff[:50],
         "errors": errors[:50],
     }
@@ -553,9 +565,9 @@ async def upload_shift_file(
 ):
     content = await file.read()
     target_month, items = _parse_shift_file_to_items(file.filename or "", content, month)
-    result = _save_shift_items(items, source="csv_upload")
+    result = _save_shift_items(items, source="jinjer_excel_upload")
     logger.info(
-        f"upload_shift_file: month={target_month} file={file.filename} fetched={result['fetched']} saved={result['saved']} skipped_no_staff={len(result['skipped_no_staff'])} errors={len(result['errors'])}"
+        f"upload_shift_file: month={target_month} file={file.filename} fetched={result['fetched']} saved={result['saved']} status_counts={result.get('status_counts', {})} skipped_no_staff={len(result['skipped_no_staff'])} errors={len(result['errors'])}"
     )
     return {"month": target_month, "file_name": file.filename, **result}
 
