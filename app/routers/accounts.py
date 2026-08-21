@@ -11,19 +11,59 @@ logger = get_logger(__name__)
 @router.get("/staffs")
 def get_staffs():
     try:
-        res = (
+        staff_res = (
             supabase.table("staff_members")
             .select("*")
             .order("sort_order")
             .order("staff_name")
             .execute()
         )
+        payroll_res = (
+            supabase.table("staff_payroll_settings")
+            .select("staff_id,staff_name,is_active")
+            .execute()
+        )
     except Exception as e:
         logger.error(f"accounts get_staffs failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="スタッフ情報の取得に失敗しました。")
 
-    logger.info(f"accounts get_staffs: count={len(res.data or [])}")
-    return res.data or []
+    staff_rows = list(staff_res.data or [])
+    existing_ids = {str(row.get("id")) for row in staff_rows if row.get("id")}
+
+    # 給与設定に存在するスタッフが staff_members 側にまだ無い場合でも、
+    # 給与・勤怠画面のスタッフ選択肢には表示できるよう補完する。
+    # staff_id を共通キーとして扱い、重複は staff_members を優先する。
+    for index, row in enumerate(payroll_res.data or []):
+        staff_id = str(row.get("staff_id") or "").strip()
+        staff_name = str(row.get("staff_name") or "").strip()
+        if not staff_id or not staff_name or staff_id in existing_ids:
+            continue
+
+        staff_rows.append(
+            {
+                "id": staff_id,
+                "staff_code": "",
+                "staff_name": staff_name,
+                "role": "staff",
+                "sort_order": 100000 + index,
+                "is_active": row.get("is_active") is not False,
+                "note": "給与設定から補完",
+            }
+        )
+        existing_ids.add(staff_id)
+
+    staff_rows.sort(
+        key=lambda row: (
+            row.get("sort_order") if row.get("sort_order") is not None else 999999,
+            str(row.get("staff_name") or ""),
+        )
+    )
+
+    logger.info(
+        f"accounts get_staffs: staff_members={len(staff_res.data or [])} "
+        f"payroll_settings={len(payroll_res.data or [])} merged={len(staff_rows)}"
+    )
+    return staff_rows
 
 
 @router.post("/staffs/upsert")
