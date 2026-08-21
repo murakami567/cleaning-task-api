@@ -33,6 +33,7 @@ from app.routers.compat import router as compat_router
 from app.routers.properties_management import router as properties_management_router
 from app.routers.rooms_management import router as rooms_management_router
 from app.routers.secure_master_reads import router as secure_master_reads_router
+from app.routers.payroll_settings import router as payroll_settings_router
 from app.routers import payroll
 
 logger = get_logger(__name__)
@@ -89,6 +90,7 @@ app.include_router(shift_attendee_priority_router)
 app.include_router(compat_router)
 app.include_router(properties_management_router)
 app.include_router(rooms_management_router)
+app.include_router(payroll_settings_router)
 app.include_router(payroll.router)
 
 logger.info("cleaning-task-api started")
