@@ -1,0 +1,73 @@
+name: Add operation role permissions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/add-operation-role.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch API permissions
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          # auth_service.py
+          p = Path('app/services/auth_service.py')
+          s = p.read_text()
+          s = s.replace('if role not in ["admin", "leader", "sub_admin"]:', 'if role not in ["admin", "leader", "sub_admin", "operation"]:', 1)
+          marker = '''def require_admin_write(current_user: dict = Depends(get_current_user)) -> dict:\n    """管理系マスタの編集権限。leader は閲覧のみ。"""\n    role = current_user.get("role")\n    if role not in ["admin", "sub_admin"]:\n        raise HTTPException(status_code=403, detail="この操作は管理者のみ実行できます。")\n    return current_user\n'''
+          addition = marker + '''\n\ndef require_shift_worklog_write(current_user: dict = Depends(get_current_user)) -> dict:\n    """シフト・実働報告の編集権限。operation は閲覧のみ。"""\n    role = current_user.get("role")\n    if role not in ["admin", "leader", "sub_admin"]:\n        raise HTTPException(status_code=403, detail="このアカウントは閲覧専用です。")\n    return current_user\n'''
+          if 'def require_shift_worklog_write' not in s:
+              s = s.replace(marker, addition)
+          p.write_text(s)
+
+          # auth.py: operation can log into admin portal
+          p = Path('app/routers/auth.py')
+          s = p.read_text()
+          s = s.replace('if user_role not in ["admin", "leader", "sub_admin"]:', 'if user_role not in ["admin", "leader", "sub_admin", "operation"]:')
+          p.write_text(s)
+
+          # worklog update/delete: operation read-only
+          p = Path('app/routers/admin_report_inner.py')
+          s = p.read_text()
+          s = s.replace('from app.services.auth_service import require_admin_or_leader', 'from app.services.auth_service import require_admin_or_leader, require_shift_worklog_write')
+          s = s.replace('def update_admin_worklog(payload: WorklogUpdateBody, current_user: dict = Depends(require_admin_or_leader)):', 'def update_admin_worklog(payload: WorklogUpdateBody, current_user: dict = Depends(require_shift_worklog_write)):')
+          s = s.replace('def delete_admin_worklog(payload: WorklogDeleteBody, current_user: dict = Depends(require_admin_or_leader)):', 'def delete_admin_worklog(payload: WorklogDeleteBody, current_user: dict = Depends(require_shift_worklog_write)):')
+          p.write_text(s)
+
+          # shift mutation endpoints: require authenticated non-operation role
+          p = Path('app/routers/compat.py')
+          s = p.read_text()
+          s = s.replace('from fastapi import APIRouter, Body, HTTPException', 'from fastapi import APIRouter, Body, Depends, HTTPException')
+          if 'from app.services.auth_service import require_shift_worklog_write' not in s:
+              s = s.replace('from app.logger import get_logger', 'from app.logger import get_logger\nfrom app.services.auth_service import require_shift_worklog_write')
+          s = s.replace('def create_shift_day(shift_date: str = Body(...), note: str = Body("")):\n    return get_or_create_shift_day(shift_date=shift_date, note=note)', 'def create_shift_day(shift_date: str = Body(...), note: str = Body(""), current_user: dict = Depends(require_shift_worklog_write)):\n    return get_or_create_shift_day(shift_date=shift_date, note=note, current_user=current_user)')
+          s = s.replace('def get_or_create_shift_day(shift_date: str = Body(...), note: str = Body("")):', 'def get_or_create_shift_day(shift_date: str = Body(...), note: str = Body(""), current_user: dict = Depends(require_shift_worklog_write)):')
+          s = s.replace('    note: str | None = Body(None),\n):', '    note: str | None = Body(None),\n    current_user: dict = Depends(require_shift_worklog_write),\n):', 1)
+          s = s.replace('def upsert_staff_schedule(body: dict[str, Any] = Body(...)):', 'def upsert_staff_schedule(body: dict[str, Any] = Body(...), current_user: dict = Depends(require_shift_worklog_write)):')
+          s = s.replace('day = get_or_create_shift_day(shift_date=shift_date, note="")', 'day = get_or_create_shift_day(shift_date=shift_date, note="", current_user=current_user)')
+          s = s.replace('            note=note,\n        )', '            note=note,\n            current_user=current_user,\n        )')
+          p.write_text(s)
+          PY
+
+      - name: Verify Python syntax
+        run: python -m compileall -q app
+
+      - name: Commit implementation
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app
+          git commit -m "feat: operation権限を追加"
+          git push
