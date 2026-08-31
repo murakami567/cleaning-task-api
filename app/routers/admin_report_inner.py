@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from app.db import supabase
 from app.logger import get_logger
-from app.services.auth_service import require_admin_or_leader
+from app.services.auth_service import require_admin_or_leader, require_shift_worklog_write
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -122,7 +122,7 @@ def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"
 
 
 @router.post("/worklogs/update")
-def update_admin_worklog(payload: WorklogUpdateBody, current_user: dict = Depends(require_admin_or_leader)):
+def update_admin_worklog(payload: WorklogUpdateBody, current_user: dict = Depends(require_shift_worklog_write)):
     if not payload.worklog_id:
         raise HTTPException(status_code=400, detail="worklog_id is required")
     if not payload.work_date or not payload.start_time or not payload.end_time:
@@ -156,7 +156,7 @@ def update_admin_worklog(payload: WorklogUpdateBody, current_user: dict = Depend
 
 
 @router.post("/worklogs/delete")
-def delete_admin_worklog(payload: WorklogDeleteBody, current_user: dict = Depends(require_admin_or_leader)):
+def delete_admin_worklog(payload: WorklogDeleteBody, current_user: dict = Depends(require_shift_worklog_write)):
     if not payload.worklog_id:
         raise HTTPException(status_code=400, detail="worklog_id is required")
 

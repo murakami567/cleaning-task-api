@@ -47,7 +47,7 @@ def get_current_user_id(current_user: dict = Depends(get_current_user)) -> str:
 
 def require_admin_or_leader(current_user: dict = Depends(get_current_user)) -> dict:
     role = current_user.get("role")
-    if role not in ["admin", "leader", "sub_admin"]:
+    if role not in ["admin", "leader", "sub_admin", "operation"]:
         raise HTTPException(status_code=403, detail="管理画面にアクセスできません。")
     return current_user
 
@@ -57,4 +57,12 @@ def require_admin_write(current_user: dict = Depends(get_current_user)) -> dict:
     role = current_user.get("role")
     if role not in ["admin", "sub_admin"]:
         raise HTTPException(status_code=403, detail="この操作は管理者のみ実行できます。")
+    return current_user
+
+
+def require_shift_worklog_write(current_user: dict = Depends(get_current_user)) -> dict:
+    """シフト・実働報告の編集権限。operation は閲覧のみ。"""
+    role = current_user.get("role")
+    if role not in ["admin", "leader", "sub_admin"]:
+        raise HTTPException(status_code=403, detail="このアカウントは閲覧専用です。")
     return current_user

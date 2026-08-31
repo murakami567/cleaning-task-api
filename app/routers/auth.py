@@ -43,7 +43,7 @@ def login(payload: LoginRequest):
         raise HTTPException(status_code=401, detail="パスワードが違います。")
 
     if payload.role == "admin_portal":
-        if user_role not in ["admin", "leader", "sub_admin"]:
+        if user_role not in ["admin", "leader", "sub_admin", "operation"]:
             logger.warning(
                 f"login failed: insufficient role login_id={payload.login_id} role={user_role}"
             )
