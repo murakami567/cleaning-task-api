@@ -79,7 +79,7 @@ def update_payroll_daily_result(
 
 
 @router.post("/payroll/daily-results/delete")
-def delete_payroll_daily_result(result_id: str = Body(...)):
+def delete_payroll_daily_result(result_id: str = Body(..., embed=True)):
     try:
         res = (
             supabase.table("payroll_daily_results")
