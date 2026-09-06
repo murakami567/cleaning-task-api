@@ -5,6 +5,7 @@ from collections import defaultdict
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.payroll_daily_service import recalculate_piece_daily_payroll
 
 router = APIRouter(tags=["payroll"])
 logger = get_logger(__name__)
@@ -549,15 +550,55 @@ def calculate_monthly_payroll(
     else:
         inserted = []
 
-    logger.info(f"calculate_monthly_payroll: year={year} month={month} count={len(inserted)}")
+    # 部屋単価スタッフは、実働送信時の日次ロジックを月次再計算でも再利用する。
+    # これにより月次計算ボタンで「作業開始～退勤」の時給分が旧ロジックへ戻らない。
+    piece_staff_ids = {
+        str(row.get("staff_id"))
+        for row in staff_settings
+        if row.get("staff_id") and str(row.get("payroll_type") or "piece") != "hourly"
+    }
+    piece_staff_dates = set()
+
+    for row in worklogs:
+        staff_id = extract_worklog_staff_id(row)
+        work_date = extract_worklog_date(row)
+        if staff_id and work_date and str(staff_id) in piece_staff_ids:
+            piece_staff_dates.add((str(staff_id), str(work_date)[:10]))
+
+    for task in cleaning_tasks:
+        task_date = str(task.get("task_date") or "")[:10]
+        assigned_ids = task.get("assigned_staff_ids") or []
+        if not isinstance(assigned_ids, list):
+            assigned_ids = []
+        if not assigned_ids and task.get("assigned_staff_id"):
+            assigned_ids = [task.get("assigned_staff_id")]
+        for staff_id in assigned_ids:
+            if str(staff_id) in piece_staff_ids and task_date:
+                piece_staff_dates.add((str(staff_id), task_date))
+
+    for staff_id, target_date in sorted(piece_staff_dates, key=lambda x: (x[1], x[0])):
+        recalculate_piece_daily_payroll(staff_id, target_date)
+
+    final_res = (
+        supabase.table("payroll_daily_results")
+        .select("*")
+        .gte("target_date", start_date)
+        .lte("target_date", end_date)
+        .order("target_date")
+        .order("staff_name")
+        .execute()
+    )
+    final_rows = final_res.data or []
+
+    logger.info(f"calculate_monthly_payroll: year={year} month={month} count={len(final_rows)}")
     return {
         "ok": True,
         "year": year,
         "month": month,
         "start_date": start_date,
         "end_date": end_date,
-        "count": len(inserted),
-        "data": inserted,
+        "count": len(final_rows),
+        "data": final_rows,
     }
 
 
