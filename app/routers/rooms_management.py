@@ -50,6 +50,8 @@ def create_room(
     wifi_ssid: str | None = Body(None),
     wifi_password: str | None = Body(None),
     note: str | None = Body(None),
+    early_checkin_fee: int | None = Body(0),
+    late_checkout_fee: int | None = Body(0),
     current_user: dict = Depends(require_admin_write),
 ):
     property_id = _text(property_id)
@@ -82,6 +84,8 @@ def create_room(
         "wifi_ssid": _text(wifi_ssid),
         "wifi_password": _text(wifi_password),
         "note": _text(note),
+        "early_checkin_fee": _int_or_default(early_checkin_fee, 0),
+        "late_checkout_fee": _int_or_default(late_checkout_fee, 0),
     }
     if cleaning_score is not None:
         payload["cleaning_score"] = _score(cleaning_score)
@@ -187,6 +191,8 @@ def update_room(
     wifi_ssid: str | None = Body(None),
     wifi_password: str | None = Body(None),
     note: str | None = Body(None),
+    early_checkin_fee: int | None = Body(None),
+    late_checkout_fee: int | None = Body(None),
     current_user: dict = Depends(require_admin_write),
 ):
     payload = {}
@@ -228,6 +234,10 @@ def update_room(
         payload["wifi_password"] = _text(wifi_password)
     if note is not None:
         payload["note"] = _text(note)
+    if early_checkin_fee is not None:
+        payload["early_checkin_fee"] = max(_int_or_default(early_checkin_fee, 0), 0)
+    if late_checkout_fee is not None:
+        payload["late_checkout_fee"] = max(_int_or_default(late_checkout_fee, 0), 0)
 
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")

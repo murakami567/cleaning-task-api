@@ -59,8 +59,25 @@ def get_tasks_with_checklist(user_id: str = Depends(get_current_user_id)):
         logger.error(f"get_tasks_with_checklist failed: user_id={user_id} {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="タスク情報の取得に失敗しました。")
 
-    cleaning_tasks = [map_cleaning_task(row, "cleaning") for row in (cleaning_res.data or [])]
-    check_tasks = [map_cleaning_task(row, "check") for row in ((check_res.data if check_res else []) or [])]
+    # 部屋マスタのアーリーCI / レイトCO料金をタスク表示へ反映する。
+    fee_map: dict[tuple[str, str], dict[str, int]] = {}
+    try:
+        properties_res = supabase.table("properties").select("id,property_name").execute()
+        property_names = {str(row.get("id")): str(row.get("property_name") or "") for row in (properties_res.data or [])}
+        rooms_res = supabase.table("rooms").select("property_id,room_name,early_checkin_fee,late_checkout_fee").execute()
+        for room in rooms_res.data or []:
+            property_name = property_names.get(str(room.get("property_id")), "")
+            room_name = str(room.get("room_name") or "")
+            if property_name and room_name:
+                fee_map[(property_name, room_name)] = {
+                    "early_checkin_fee": int(room.get("early_checkin_fee") or 0),
+                    "late_checkout_fee": int(room.get("late_checkout_fee") or 0),
+                }
+    except Exception as e:
+        logger.warning(f"room fee lookup failed: {e}")
+
+    cleaning_tasks = [map_cleaning_task(row, "cleaning", fee_map) for row in (cleaning_res.data or [])]
+    check_tasks = [map_cleaning_task(row, "check", fee_map) for row in ((check_res.data if check_res else []) or [])]
     other_tasks = [map_other_task(row) for row in (other_res.data or [])]
 
     logger.info(
@@ -141,11 +158,13 @@ def update_check_task_status(
     return {"ok": True, "task_id": task_id, "updated": payload, "data": update_res.data}
 
 
-def map_cleaning_task(row: dict[str, Any], task_kind: str):
+def map_cleaning_task(row: dict[str, Any], task_kind: str, fee_map: dict[tuple[str, str], dict[str, int]] | None = None):
     property_name = row.get("property_name") or ""
     room_name = row.get("room_name") or ""
     next_guest_count = row.get("next_guest_count") or 0
     next_stay_nights = row.get("next_stay_nights") or 0
+
+    room_fees = (fee_map or {}).get((property_name, room_name), {})
 
     checklist = row.get("checklist")
     if not isinstance(checklist, dict):
@@ -164,8 +183,8 @@ def map_cleaning_task(row: dict[str, Any], task_kind: str):
         "note": row.get("note") or "",
         "assigneeName": first_list_value(row.get("assigned_staff_names")) or row.get("assigned_staff_name") or "",
         "checkerName": row.get("checker_name") or "",
-        "rateCi": row.get("early_checkin_fee") or "",
-        "rateCo": row.get("late_checkout_fee") or "",
+        "rateCi": room_fees.get("early_checkin_fee", 0),
+        "rateCo": room_fees.get("late_checkout_fee", 0),
         "towelCount": calc_towel_display(property_name, next_guest_count, next_stay_nights),
         "checklist": checklist,
     }
