@@ -140,7 +140,8 @@ def recalculate_piece_daily_payroll(staff_id: str, target_date: str):
         return {"ok": True, "skipped": "payroll_setting_not_found"}
 
     setting = setting_res.data[0]
-    if setting.get("payroll_type", "piece") != "piece":
+    payroll_type = str(setting.get("payroll_type") or "piece")
+    if payroll_type == "hourly":
         return {"ok": True, "skipped": "not_piece_staff"}
 
     staff_name = setting.get("staff_name") or ""
@@ -269,7 +270,7 @@ def recalculate_piece_daily_payroll(staff_id: str, target_date: str):
             "target_date": target_date,
             "staff_id": staff_id,
             "staff_name": staff_name,
-            "payroll_type": "piece",
+            "payroll_type": payroll_type,
             "facility": row.get("facility") or "",
             "room_count": _to_int(row.get("room_count")),
             "worker_count": _to_int(row.get("worker_count"), 1),
