@@ -1,0 +1,46 @@
+name: Align monthly piece payroll
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/align-monthly-piece-payroll.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update monthly payroll recalculation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/routers/payroll.py')
+          s = p.read_text()
+
+          marker = 'from app.logger import get_logger\n'
+          import_line = 'from app.services.payroll_daily_service import recalculate_piece_daily_payroll\n'
+          if import_line not in s:
+              if marker not in s:
+                  raise SystemExit('logger import marker not found')
+              s = s.replace(marker, marker + import_line, 1)
+
+          old = '''    else:\n        inserted = []\n\n    logger.info(f"calculate_monthly_payroll: year={year} month={month} count={len(inserted)}")\n    return {\n        "ok": True,\n        "year": year,\n        "month": month,\n        "start_date": start_date,\n        "end_date": end_date,\n        "count": len(inserted),\n        "data": inserted,\n    }\n'''
+          new = '''    else:\n        inserted = []\n\n    # 部屋単価スタッフは、実働送信時の日次ロジックを月次再計算でも再利用する。\n    # これにより月次計算ボタンで「作業開始～退勤」の時給分が旧ロジックへ戻らない。\n    piece_staff_ids = {\n        str(row.get("staff_id"))\n        for row in staff_settings\n        if row.get("staff_id") and str(row.get("payroll_type") or "piece") != "hourly"\n    }\n    piece_staff_dates = set()\n\n    for row in worklogs:\n        staff_id = extract_worklog_staff_id(row)\n        work_date = extract_worklog_date(row)\n        if staff_id and work_date and str(staff_id) in piece_staff_ids:\n            piece_staff_dates.add((str(staff_id), str(work_date)[:10]))\n\n    for task in cleaning_tasks:\n        task_date = str(task.get("task_date") or "")[:10]\n        assigned_ids = task.get("assigned_staff_ids") or []\n        if not isinstance(assigned_ids, list):\n            assigned_ids = []\n        if not assigned_ids and task.get("assigned_staff_id"):\n            assigned_ids = [task.get("assigned_staff_id")]\n        for staff_id in assigned_ids:\n            if str(staff_id) in piece_staff_ids and task_date:\n                piece_staff_dates.add((str(staff_id), task_date))\n\n    for staff_id, target_date in sorted(piece_staff_dates, key=lambda x: (x[1], x[0])):\n        recalculate_piece_daily_payroll(staff_id, target_date)\n\n    final_res = (\n        supabase.table("payroll_daily_results")\n        .select("*")\n        .gte("target_date", start_date)\n        .lte("target_date", end_date)\n        .order("target_date")\n        .order("staff_name")\n        .execute()\n    )\n    final_rows = final_res.data or []\n\n    logger.info(f"calculate_monthly_payroll: year={year} month={month} count={len(final_rows)}")\n    return {\n        "ok": True,\n        "year": year,\n        "month": month,\n        "start_date": start_date,\n        "end_date": end_date,\n        "count": len(final_rows),\n        "data": final_rows,\n    }\n'''
+          if old not in s:
+              raise SystemExit('monthly return marker not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Compile Python
+        run: python -m compileall -q app
+      - name: Commit changes and remove workflow
+        run: |
+          rm .github/workflows/align-monthly-piece-payroll.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/routers/payroll.py .github/workflows/align-monthly-piece-payroll.yml
+          git commit -m "fix: 月次計算も日次部屋単価ロジックに統一"
+          git push
