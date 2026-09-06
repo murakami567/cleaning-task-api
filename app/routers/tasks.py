@@ -160,6 +160,8 @@ def update_task(
     checker_id: str | None = Body(None),
     checker_name: str | None = Body(None),
     assignment_locked: bool | None = Body(None),
+    early_checkin_time: str | None = Body(None),
+    late_checkout_time: str | None = Body(None),
 ):
     payload = {}
 
@@ -198,6 +200,12 @@ def update_task(
 
     if assignment_locked is not None:
         payload["assignment_locked"] = assignment_locked
+
+    if early_checkin_time is not None:
+        payload["early_checkin_time"] = early_checkin_time or None
+
+    if late_checkout_time is not None:
+        payload["late_checkout_time"] = late_checkout_time or None
 
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")

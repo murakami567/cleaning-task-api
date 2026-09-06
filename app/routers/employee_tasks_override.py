@@ -185,6 +185,8 @@ def map_cleaning_task(row: dict[str, Any], task_kind: str, fee_map: dict[tuple[s
         "checkerName": row.get("checker_name") or "",
         "rateCi": room_fees.get("early_checkin_fee", 0),
         "rateCo": room_fees.get("late_checkout_fee", 0),
+        "earlyCheckinTime": row.get("early_checkin_time") or "",
+        "lateCheckoutTime": row.get("late_checkout_time") or "",
         "towelCount": calc_towel_display(property_name, next_guest_count, next_stay_nights),
         "checklist": checklist,
     }
