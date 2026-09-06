@@ -1,0 +1,115 @@
+name: Add payroll daily edit delete
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/add-payroll-daily-edit-delete.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add payroll daily edit/delete endpoints
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/routers/payroll.py')
+          s = p.read_text()
+          marker = '@router.post("/payroll/settings/staff/upsert")'
+          if marker not in s:
+              raise SystemExit('marker not found')
+          block = '''@router.post("/payroll/daily-results/update")
+def update_payroll_daily_result(
+    result_id: str = Body(...),
+    cleaning_amount: int | None = Body(None),
+    actual_hours: float | None = Body(None),
+    hourly_rate: int | None = Body(None),
+    hourly_amount: int | None = Body(None),
+    adjustment_amount: int | None = Body(None),
+    transportation_fee: int | None = Body(None),
+    note: str | None = Body(None),
+    status: str | None = Body(None),
+):
+    existing = (
+        supabase.table("payroll_daily_results")
+        .select("*")
+        .eq("id", result_id)
+        .limit(1)
+        .execute()
+    )
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="給与日次データが見つかりません。")
+
+    row = existing.data[0]
+    payload = {}
+    for key, value in {
+        "cleaning_amount": cleaning_amount,
+        "actual_hours": actual_hours,
+        "hourly_rate": hourly_rate,
+        "hourly_amount": hourly_amount,
+        "adjustment_amount": adjustment_amount,
+        "transportation_fee": transportation_fee,
+        "note": note,
+        "status": status,
+    }.items():
+        if value is not None:
+            payload[key] = value
+
+    next_cleaning = to_int(payload.get("cleaning_amount", row.get("cleaning_amount")))
+    next_hourly = to_int(payload.get("hourly_amount", row.get("hourly_amount")))
+    next_adjustment = to_int(payload.get("adjustment_amount", row.get("adjustment_amount")))
+    next_transport = to_int(payload.get("transportation_fee", row.get("transportation_fee")))
+    payload["base_amount"] = next_cleaning + next_hourly
+    payload["final_amount"] = next_cleaning + next_hourly + next_adjustment + next_transport
+    if "actual_hours" in payload:
+        payload["work_hours"] = payload["actual_hours"]
+
+    try:
+        res = (
+            supabase.table("payroll_daily_results")
+            .update(payload)
+            .eq("id", result_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_payroll_daily_result failed: id={result_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="給与日次データの更新に失敗しました。")
+
+    return {"ok": True, "data": (res.data or [None])[0]}
+
+
+@router.post("/payroll/daily-results/delete")
+def delete_payroll_daily_result(result_id: str = Body(...)):
+    try:
+        res = (
+            supabase.table("payroll_daily_results")
+            .delete()
+            .eq("id", result_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"delete_payroll_daily_result failed: id={result_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="給与日次データの削除に失敗しました。")
+    return {"ok": True, "data": res.data or []}
+
+
+'''
+          s = s.replace(marker, block + marker, 1)
+          p.write_text(s)
+          PY
+      - run: python -m py_compile app/routers/payroll.py
+      - name: Commit changes and remove workflow
+        run: |
+          rm .github/workflows/add-payroll-daily-edit-delete.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/routers/payroll.py .github/workflows/add-payroll-daily-edit-delete.yml
+          git commit -m "feat: 給与日次データの修正削除APIを追加"
+          git push
