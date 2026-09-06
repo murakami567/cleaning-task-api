@@ -8,6 +8,7 @@ from app.db import supabase
 from app.logger import get_logger
 from app.routers.tasks import _auto_progress_started_tasks
 from app.services.auth_service import get_current_user_id, require_admin_or_leader
+from app.services.payroll_daily_service import recalculate_piece_daily_payroll
 
 router = APIRouter(prefix="/api/employee", tags=["employee"])
 logger = get_logger(__name__)
@@ -405,8 +406,27 @@ def create_worklog(
     if not res.data:
         raise HTTPException(status_code=500, detail="実働登録に失敗しました。")
 
+    payroll_sync = None
+    try:
+        if insert_data.get("work_date"):
+            payroll_sync = recalculate_piece_daily_payroll(
+                user_id, str(insert_data.get("work_date"))
+            )
+    except Exception as e:
+        # 実働自体は保存済みなので、給与同期エラーで同じ実働を再POSTさせない。
+        logger.error(
+            f"create_worklog payroll sync failed: user_id={user_id} "
+            f"date={insert_data.get('work_date')} {e}",
+            exc_info=True,
+        )
+        payroll_sync = {"ok": False, "error": "daily_payroll_sync_failed"}
+
     logger.info(f"create_worklog: user_id={user_id} date={insert_data.get('work_date')}")
-    return {"message": "実働を登録しました。", "data": res.data[0]}
+    return {
+        "message": "実働を登録しました。",
+        "data": res.data[0],
+        "payroll_sync": payroll_sync,
+    }
 
 
 @router.post("/lost-items")
