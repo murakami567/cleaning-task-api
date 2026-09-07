@@ -24,6 +24,8 @@ def update_task_with_times(
     checker_name: str | None = Body(None),
     checklist: dict[str, Any] | None = Body(None),
     checked_by_name: str | None = Body(None),
+    early_checkin_time: str | None = Body(None),
+    late_checkout_time: str | None = Body(None),
 ):
     """
     清掃タスク更新。
@@ -34,6 +36,7 @@ def update_task_with_times(
     - 清掃完了/完了: cleaning_completed_at を記録
     - チェック完了: checked_at を記録
     - checklist が送られてきた場合は cleaning_tasks.checklist に保存
+    - early_checkin_time / late_checkout_time は部屋別の当日対応時刻として保存
     """
     payload = {}
     now = datetime.now(timezone.utc).isoformat()
@@ -49,7 +52,6 @@ def update_task_with_times(
             payload["cleaning_completed_at"] = None
             payload["checked_at"] = None
         elif status == "清掃中":
-            # 開始時刻は保持する
             pass
         elif status in ["清掃完了", "完了"]:
             payload["cleaning_completed_at"] = now
@@ -88,6 +90,12 @@ def update_task_with_times(
 
     if checker_name is not None:
         payload["checker_name"] = checker_name
+
+    if early_checkin_time is not None:
+        payload["early_checkin_time"] = early_checkin_time or None
+
+    if late_checkout_time is not None:
+        payload["late_checkout_time"] = late_checkout_time or None
 
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
