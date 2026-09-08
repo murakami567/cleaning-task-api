@@ -1,0 +1,44 @@
+name: Add cleaning time to worklogs
+on:
+  push:
+    paths:
+      - '.github/workflows/add-cleaning-time-to-worklogs.yml'
+permissions:
+  contents: write
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch admin worklog API
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/routers/admin_reports.py')
+          s=p.read_text()
+          old='''    rows = res.data or []\n    staff_by_id = _staff_map([str(row.get("user_id") or "") for row in rows])\n\n    worklogs = []\n    for row in rows:\n'''
+          new='''    rows = res.data or []\n    staff_by_id = _staff_map([str(row.get("user_id") or "") for row in rows])\n\n    task_map: dict[tuple[str, str, str], dict[str, Any]] = {}\n    try:\n        task_res = (\n            supabase.table("cleaning_tasks")\n            .select("property_name,room_name,assigned_staff_id,assigned_staff_ids,cleaning_started_at,cleaning_completed_at")\n            .eq("task_date", date)\n            .execute()\n        )\n        for task in task_res.data or []:\n            property_name = str(task.get("property_name") or "")\n            room_name = str(task.get("room_name") or "")\n            staff_ids = task.get("assigned_staff_ids") if isinstance(task.get("assigned_staff_ids"), list) else []\n            single_staff_id = str(task.get("assigned_staff_id") or "")\n            if single_staff_id and single_staff_id not in staff_ids:\n                staff_ids.append(single_staff_id)\n            for staff_id in staff_ids:\n                task_map[(str(staff_id), property_name, room_name)] = task\n    except Exception as e:\n        logger.warning(f"cleaning task time lookup skipped: date={date} {e}")\n\n    worklogs = []\n    for row in rows:\n'''
+          if old not in s: raise SystemExit('insert point not found')
+          s=s.replace(old,new,1)
+          old2='''        worklogs.append({\n            "id": row.get("id"),\n'''
+          new2='''        task = task_map.get((sid, str(row.get("property_name") or ""), str(row.get("room_name") or "")), {})\n        cleaning_started_at = task.get("cleaning_started_at") or ""\n        cleaning_completed_at = task.get("cleaning_completed_at") or ""\n        cleaning_minutes = 0\n        if cleaning_started_at and cleaning_completed_at:\n            try:\n                started_dt = datetime.fromisoformat(str(cleaning_started_at).replace("Z", "+00:00"))\n                completed_dt = datetime.fromisoformat(str(cleaning_completed_at).replace("Z", "+00:00"))\n                cleaning_minutes = max(int((completed_dt - started_dt).total_seconds() // 60), 0)\n            except Exception:\n                cleaning_minutes = 0\n\n        worklogs.append({\n            "id": row.get("id"),\n'''
+          if old2 not in s: raise SystemExit('worklog append point not found')
+          s=s.replace(old2,new2,1)
+          old3='''            "work_minutes": int(work_minutes or 0),\n        })\n'''
+          new3='''            "work_minutes": int(work_minutes or 0),\n            "cleaning_started_at": cleaning_started_at,\n            "cleaning_completed_at": cleaning_completed_at,\n            "cleaning_minutes": cleaning_minutes,\n        })\n'''
+          if old3 not in s: raise SystemExit('worklog field point not found')
+          s=s.replace(old3,new3,1)
+          if 'from datetime import date\n' in s:
+              s=s.replace('from datetime import date\n','from datetime import date, datetime\n',1)
+          p.write_text(s)
+          PY
+      - run: python -m py_compile app/routers/admin_reports.py
+      - name: Commit and cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/routers/admin_reports.py
+          git commit -m "feat: 実働報告APIに部屋別清掃時間を追加"
+          git rm .github/workflows/add-cleaning-time-to-worklogs.yml
+          git commit -m "chore: remove temporary migration workflow"
+          git push
