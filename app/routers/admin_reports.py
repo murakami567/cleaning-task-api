@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -195,6 +195,26 @@ def get_admin_worklogs(
     rows = res.data or []
     staff_by_id = _staff_map([str(row.get("user_id") or "") for row in rows])
 
+    task_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    try:
+        task_res = (
+            supabase.table("cleaning_tasks")
+            .select("property_name,room_name,assigned_staff_id,assigned_staff_ids,cleaning_started_at,cleaning_completed_at")
+            .eq("task_date", date)
+            .execute()
+        )
+        for task in task_res.data or []:
+            property_name = str(task.get("property_name") or "")
+            room_name = str(task.get("room_name") or "")
+            staff_ids = task.get("assigned_staff_ids") if isinstance(task.get("assigned_staff_ids"), list) else []
+            single_staff_id = str(task.get("assigned_staff_id") or "")
+            if single_staff_id and single_staff_id not in staff_ids:
+                staff_ids.append(single_staff_id)
+            for staff_id in staff_ids:
+                task_map[(str(staff_id), property_name, room_name)] = task
+    except Exception as e:
+        logger.warning(f"cleaning task time lookup skipped: date={date} {e}")
+
     worklogs = []
     for row in rows:
         sid = str(row.get("user_id") or "")
@@ -207,6 +227,18 @@ def get_admin_worklogs(
                 row.get("end_time") or "",
                 break_minutes,
             )
+        task = task_map.get((sid, str(row.get("property_name") or ""), str(row.get("room_name") or "")), {})
+        cleaning_started_at = task.get("cleaning_started_at") or ""
+        cleaning_completed_at = task.get("cleaning_completed_at") or ""
+        cleaning_minutes = 0
+        if cleaning_started_at and cleaning_completed_at:
+            try:
+                started_dt = datetime.fromisoformat(str(cleaning_started_at).replace("Z", "+00:00"))
+                completed_dt = datetime.fromisoformat(str(cleaning_completed_at).replace("Z", "+00:00"))
+                cleaning_minutes = max(int((completed_dt - started_dt).total_seconds() // 60), 0)
+            except Exception:
+                cleaning_minutes = 0
+
         worklogs.append({
             "id": row.get("id"),
             "user_id": sid,
@@ -223,6 +255,9 @@ def get_admin_worklogs(
             "note": row.get("note") or "",
             "created_at": row.get("created_at") or "",
             "work_minutes": int(work_minutes or 0),
+            "cleaning_started_at": cleaning_started_at,
+            "cleaning_completed_at": cleaning_completed_at,
+            "cleaning_minutes": cleaning_minutes,
         })
 
     logger.info(f"get_admin_worklogs: date={date} count={len(worklogs)} user={current_user.get('user_id')}")
