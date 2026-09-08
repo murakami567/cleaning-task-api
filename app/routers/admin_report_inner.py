@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
@@ -83,6 +83,36 @@ def _find_worklog_table(worklog_id: str) -> str:
     raise HTTPException(status_code=404, detail="対象の実働報告が見つかりません。")
 
 
+def _normalize(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _fetch_cleaning_task_map(work_date: str) -> dict[tuple[str, str, str], dict]:
+    task_map: dict[tuple[str, str, str], dict] = {}
+    try:
+        res = (
+            supabase.table("cleaning_tasks")
+            .select(
+                "property_name,room_name,assigned_staff_id,assigned_staff_ids,"
+                "cleaning_started_at,cleaning_completed_at"
+            )
+            .eq("task_date", work_date)
+            .execute()
+        )
+        for task in res.data or []:
+            property_name = _normalize(task.get("property_name"))
+            room_name = _normalize(task.get("room_name"))
+            staff_ids = [str(x) for x in (task.get("assigned_staff_ids") or [])]
+            single_staff_id = _normalize(task.get("assigned_staff_id"))
+            if single_staff_id and single_staff_id not in staff_ids:
+                staff_ids.append(single_staff_id)
+            for staff_id in staff_ids:
+                task_map[(staff_id, property_name, room_name)] = task
+    except Exception as e:
+        logger.warning(f"cleaning task time lookup skipped: date={work_date} {e}")
+    return task_map
+
+
 @router.get("/worklogs/today")
 def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"), current_user: dict = Depends(require_admin_or_leader)):
     work_date = date_param or date.today().isoformat()
@@ -93,6 +123,7 @@ def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"
         raise HTTPException(status_code=500, detail="実働報告の取得に失敗しました。")
 
     staff_by_id = _staff_map_by_id([str(row.get("user_id") or row.get("staff_id") or "") for row in rows])
+    task_map = _fetch_cleaning_task_map(work_date)
     worklogs = []
     for row in rows:
         sid = str(row.get("user_id") or row.get("staff_id") or "")
@@ -101,14 +132,29 @@ def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"
         work_minutes = row.get("work_minutes")
         if work_minutes is None:
             work_minutes = _minutes_between(row.get("start_time") or "", row.get("end_time") or "", break_minutes)
+
+        property_name = _normalize(row.get("property_name"))
+        room_name = _normalize(row.get("room_name"))
+        task = task_map.get((sid, property_name, room_name), {})
+        cleaning_started_at = task.get("cleaning_started_at") or ""
+        cleaning_completed_at = task.get("cleaning_completed_at") or ""
+        cleaning_minutes = 0
+        if cleaning_started_at and cleaning_completed_at:
+            try:
+                started_dt = datetime.fromisoformat(str(cleaning_started_at).replace("Z", "+00:00"))
+                completed_dt = datetime.fromisoformat(str(cleaning_completed_at).replace("Z", "+00:00"))
+                cleaning_minutes = max(int((completed_dt - started_dt).total_seconds() // 60), 0)
+            except Exception:
+                cleaning_minutes = 0
+
         worklogs.append({
             "id": row.get("id"),
             "user_id": sid,
             "staff_name": row.get("staff_name") or staff.get("staff_name") or "",
             "staff_code": row.get("staff_code") or staff.get("staff_code") or "",
             "work_date": row.get("work_date") or work_date,
-            "property_name": row.get("property_name") or "",
-            "room_name": row.get("room_name") or "",
+            "property_name": property_name,
+            "room_name": room_name,
             "work_start_time": row.get("work_start_time") or row.get("start_time") or "",
             "start_time": row.get("start_time") or "",
             "end_time": row.get("end_time") or "",
@@ -117,6 +163,9 @@ def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"
             "note": row.get("note") or "",
             "created_at": row.get("created_at") or "",
             "work_minutes": int(work_minutes or 0),
+            "cleaning_started_at": cleaning_started_at,
+            "cleaning_completed_at": cleaning_completed_at,
+            "cleaning_minutes": cleaning_minutes,
         })
     return {"worklogs": worklogs}
 
