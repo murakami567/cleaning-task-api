@@ -112,6 +112,31 @@ def _attendance_days(staff: dict[str, Any], start: str, end: str) -> int:
     staff_code = str(staff.get("staff_code") or "")
     dates: set[str] = set()
 
+    # メイトカルテの「出勤」は、まずシフト表の出勤予定を基準に数える。
+    # 遅刻も実質出勤日として扱う。
+    try:
+        shift_res = (
+            supabase.table("shift_days")
+            .select("shift_date, shift_entries(staff_id,status)")
+            .gte("shift_date", start)
+            .lte("shift_date", end)
+            .execute()
+        )
+        for day in shift_res.data or []:
+            shift_date = str(day.get("shift_date") or "")[:10]
+            if not shift_date:
+                continue
+            entries = day.get("shift_entries") if isinstance(day.get("shift_entries"), list) else []
+            for entry in entries:
+                if str(entry.get("staff_id") or "") != staff_id:
+                    continue
+                if str(entry.get("status") or "") in ["出勤", "遅刻"]:
+                    dates.add(shift_date)
+                    break
+    except Exception as e:
+        logger.warning(f"mate shift attendance lookup failed: staff_id={staff_id} {e}")
+
+    # 実打刻がある日も補完する。
     try:
         q = (
             supabase.table("attendance_logs")
@@ -132,6 +157,7 @@ def _attendance_days(staff: dict[str, Any], start: str, end: str) -> int:
     except Exception as e:
         logger.warning(f"mate attendance_logs lookup failed: staff_id={staff_id} {e}")
 
+    # 実働報告がある日も補完する。
     try:
         res = (
             supabase.table("work_logs")
