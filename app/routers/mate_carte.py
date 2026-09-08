@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
@@ -9,6 +10,7 @@ from app.services.auth_service import require_admin_or_leader
 
 router = APIRouter(prefix="/mate-cartes", tags=["mate-cartes"])
 logger = get_logger(__name__)
+JST = ZoneInfo("Asia/Tokyo")
 
 
 def _get_current_staff(current_user: dict) -> dict[str, Any]:
@@ -50,21 +52,44 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
-def _staff_matches_task(row: dict[str, Any], staff_id: str) -> bool:
+def _split_names(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if value is None:
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    for separator in ["、", "，", ",", "/", "・"]:
+        text = text.replace(separator, " ")
+    return [x.strip() for x in text.split() if x.strip()]
+
+
+def _staff_matches_task(row: dict[str, Any], staff_id: str, staff_name: str = "") -> bool:
     ids = row.get("assigned_staff_ids") if isinstance(row.get("assigned_staff_ids"), list) else []
-    return staff_id in [str(x) for x in ids] or str(row.get("assigned_staff_id") or "") == staff_id
+    if staff_id in [str(x) for x in ids]:
+        return True
+    if str(row.get("assigned_staff_id") or "") == staff_id:
+        return True
+    if staff_name:
+        names = _split_names(row.get("assigned_staff_names"))
+        if not names:
+            names = _split_names(row.get("assigned_staff_name") or row.get("assignee_name") or row.get("assignee"))
+        if staff_name in names:
+            return True
+    return False
 
 
-def _task_stats(rows: list[dict[str, Any]], staff_id: str) -> dict[str, Any]:
+def _task_stats(rows: list[dict[str, Any]], staff_id: str, staff_name: str = "") -> dict[str, Any]:
     matched: list[dict[str, Any]] = []
     durations: list[int] = []
     properties: list[str] = []
 
     for row in rows:
-        if not _staff_matches_task(row, staff_id):
+        if not _staff_matches_task(row, staff_id, staff_name):
             continue
         completed = row.get("cleaning_completed_at")
-        if not completed and row.get("status") not in ["完了", "チェック完了"]:
+        if not completed and row.get("status") not in ["清掃完了", "完了", "チェック完了"]:
             continue
         matched.append(row)
         property_name = str(row.get("property_name") or "").strip()
@@ -80,6 +105,103 @@ def _task_stats(rows: list[dict[str, Any]], staff_id: str) -> dict[str, Any]:
         "average_cleaning_minutes": round(sum(durations) / len(durations)) if durations else None,
         "worked_property_names": properties,
     }
+
+
+def _attendance_days(staff: dict[str, Any], start: str, end: str) -> int:
+    staff_id = str(staff.get("id") or "")
+    staff_code = str(staff.get("staff_code") or "")
+    dates: set[str] = set()
+
+    try:
+        q = (
+            supabase.table("attendance_logs")
+            .select("work_date, staff_id, staff_code, clock_in_at, attended_at")
+            .gte("work_date", start)
+            .lte("work_date", end)
+        )
+        res = q.execute()
+        for row in res.data or []:
+            row_id = str(row.get("staff_id") or "")
+            row_code = str(row.get("staff_code") or "")
+            if row_id != staff_id and (not staff_code or row_code != staff_code):
+                continue
+            if row.get("clock_in_at") or row.get("attended_at"):
+                d = str(row.get("work_date") or "")[:10]
+                if d:
+                    dates.add(d)
+    except Exception as e:
+        logger.warning(f"mate attendance_logs lookup failed: staff_id={staff_id} {e}")
+
+    try:
+        res = (
+            supabase.table("work_logs")
+            .select("work_date, user_id, staff_code")
+            .gte("work_date", start)
+            .lte("work_date", end)
+            .execute()
+        )
+        for row in res.data or []:
+            row_id = str(row.get("user_id") or "")
+            row_code = str(row.get("staff_code") or "")
+            if row_id != staff_id and (not staff_code or row_code != staff_code):
+                continue
+            d = str(row.get("work_date") or "")[:10]
+            if d:
+                dates.add(d)
+    except Exception as e:
+        logger.warning(f"mate work_logs attendance fallback failed: staff_id={staff_id} {e}")
+
+    return len(dates)
+
+
+def _worklog_cleaning_count(staff: dict[str, Any], start: str, end: str) -> int:
+    staff_id = str(staff.get("id") or "")
+    staff_code = str(staff.get("staff_code") or "")
+    unique_rooms: set[tuple[str, str, str]] = set()
+    try:
+        res = (
+            supabase.table("work_logs")
+            .select("work_date, user_id, staff_code, property_name, room_name, work_type")
+            .gte("work_date", start)
+            .lte("work_date", end)
+            .execute()
+        )
+        for row in res.data or []:
+            row_id = str(row.get("user_id") or "")
+            row_code = str(row.get("staff_code") or "")
+            if row_id != staff_id and (not staff_code or row_code != staff_code):
+                continue
+            if str(row.get("work_type") or "cleaning") not in ["cleaning", "清掃"]:
+                continue
+            work_date = str(row.get("work_date") or "")[:10]
+            property_name = str(row.get("property_name") or "").strip()
+            room_name = str(row.get("room_name") or "").strip()
+            if work_date and (property_name or room_name):
+                unique_rooms.add((work_date, property_name, room_name))
+    except Exception as e:
+        logger.warning(f"mate work_logs cleaning fallback failed: staff_id={staff_id} {e}")
+    return len(unique_rooms)
+
+
+def _fetch_task_stats(staff: dict[str, Any], start: str, end: str) -> dict[str, Any]:
+    staff_id = str(staff.get("id") or "")
+    staff_name = str(staff.get("staff_name") or "")
+    try:
+        res = (
+            supabase.table("cleaning_tasks")
+            .select("id, task_date, property_name, room_name, status, assigned_staff_ids, assigned_staff_id, assigned_staff_names, assigned_staff_name, cleaning_started_at, cleaning_completed_at")
+            .gte("task_date", start)
+            .lte("task_date", end)
+            .execute()
+        )
+        stats = _task_stats(list(res.data or []), staff_id, staff_name)
+    except Exception as e:
+        logger.warning(f"mate cleaning task lookup failed: staff_id={staff_id} start={start} end={end} {e}")
+        stats = {"cleaning_count": 0, "average_cleaning_minutes": None, "worked_property_names": []}
+
+    worklog_count = _worklog_cleaning_count(staff, start, end)
+    stats["cleaning_count"] = max(int(stats.get("cleaning_count") or 0), worklog_count)
+    return stats
 
 
 def _pick_staff_value(staff: dict[str, Any], keys: list[str]):
@@ -127,7 +249,7 @@ def get_mate_properties(current_user: dict = Depends(require_admin_or_leader)):
 
 @router.get("/{staff_id}/dashboard")
 def get_mate_dashboard(staff_id: str, current_user: dict = Depends(require_admin_or_leader)):
-    today = date.today()
+    today = datetime.now(JST).date()
     month_start, month_end = _month_range(today)
 
     try:
@@ -165,72 +287,15 @@ def get_mate_dashboard(staff_id: str, current_user: dict = Depends(require_admin
         except Exception as e:
             logger.warning(f"mate dashboard property lookup failed: staff_id={staff_id} {e}")
 
-    attendance_days = 0
-    try:
-        attendance_res = (
-            supabase.table("attendance_logs")
-            .select("work_date, staff_id, clock_in_at")
-            .eq("staff_id", staff_id)
-            .gte("work_date", month_start)
-            .lte("work_date", month_end)
-            .execute()
-        )
-        attendance_days = len({
-            str(row.get("work_date"))
-            for row in attendance_res.data or []
-            if row.get("work_date") and row.get("clock_in_at")
-        })
-    except Exception as e:
-        logger.warning(f"mate dashboard attendance lookup failed: staff_id={staff_id} {e}")
-
-    try:
-        task_res = (
-            supabase.table("cleaning_tasks")
-            .select("id, task_date, property_name, room_name, status, assigned_staff_ids, assigned_staff_id, cleaning_started_at, cleaning_completed_at")
-            .gte("task_date", month_start)
-            .lte("task_date", month_end)
-            .execute()
-        )
-        current_stats = _task_stats(list(task_res.data or []), staff_id)
-    except Exception as e:
-        logger.warning(f"mate dashboard cleaning lookup failed: staff_id={staff_id} {e}")
-        current_stats = {"cleaning_count": 0, "average_cleaning_minutes": None, "worked_property_names": []}
+    attendance_days = _attendance_days(staff, month_start, month_end)
+    current_stats = _fetch_task_stats(staff, month_start, month_end)
 
     monthly_history: list[dict[str, Any]] = []
     cursor = today.replace(day=1)
     for _ in range(3):
         start, end = _month_range(cursor)
-        try:
-            month_tasks_res = (
-                supabase.table("cleaning_tasks")
-                .select("id, task_date, property_name, room_name, status, assigned_staff_ids, assigned_staff_id, cleaning_started_at, cleaning_completed_at")
-                .gte("task_date", start)
-                .lte("task_date", end)
-                .execute()
-            )
-            stats = _task_stats(list(month_tasks_res.data or []), staff_id)
-        except Exception as e:
-            logger.warning(f"mate dashboard monthly cleaning lookup failed: staff_id={staff_id} month={start[:7]} {e}")
-            stats = {"cleaning_count": 0, "average_cleaning_minutes": None, "worked_property_names": []}
-
-        month_attendance_days = 0
-        try:
-            month_att_res = (
-                supabase.table("attendance_logs")
-                .select("work_date, staff_id, clock_in_at")
-                .eq("staff_id", staff_id)
-                .gte("work_date", start)
-                .lte("work_date", end)
-                .execute()
-            )
-            month_attendance_days = len({
-                str(row.get("work_date"))
-                for row in month_att_res.data or []
-                if row.get("work_date") and row.get("clock_in_at")
-            })
-        except Exception as e:
-            logger.warning(f"mate dashboard monthly attendance lookup failed: staff_id={staff_id} month={start[:7]} {e}")
-
+        stats = _fetch_task_stats(staff, start, end)
+        month_attendance_days = _attendance_days(staff, start, end)
         monthly_history.append({
             "month": start[:7],
             "attendance_days": month_attendance_days,
@@ -289,9 +354,17 @@ def get_cleaning_summary(
     if not record_date:
         raise HTTPException(status_code=400, detail="record_date is required")
     try:
+        staff_res = (
+            supabase.table("staff_members")
+            .select("staff_name")
+            .eq("id", staff_id)
+            .limit(1)
+            .execute()
+        )
+        staff_name = str((staff_res.data or [{}])[0].get("staff_name") or "")
         res = (
             supabase.table("cleaning_tasks")
-            .select("id, property_name, room_name, task_date, status, assigned_staff_ids, assigned_staff_id, cleaning_started_at, cleaning_completed_at")
+            .select("id, property_name, room_name, task_date, status, assigned_staff_ids, assigned_staff_id, assigned_staff_names, assigned_staff_name, cleaning_started_at, cleaning_completed_at")
             .eq("task_date", record_date)
             .execute()
         )
@@ -305,9 +378,7 @@ def get_cleaning_summary(
     property_names: list[str] = []
 
     for row in res.data or []:
-        ids = row.get("assigned_staff_ids") if isinstance(row.get("assigned_staff_ids"), list) else []
-        single_id = row.get("assigned_staff_id")
-        if staff_id not in ids and staff_id != single_id:
+        if not _staff_matches_task(row, staff_id, staff_name):
             continue
         tasks.append(row)
         property_name = row.get("property_name")
