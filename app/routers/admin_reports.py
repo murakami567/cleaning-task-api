@@ -71,6 +71,21 @@ def _staff_map(ids: list[str]) -> dict[str, dict[str, Any]]:
     return {str(row.get("id")): row for row in (res.data or [])}
 
 
+def _normalize_key(value: Any) -> str:
+    return "".join(str(value or "").strip().split()).lower()
+
+
+def _split_assignee_names(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    for separator in ["、", "，", ",", "/", "・"]:
+        text = text.replace(separator, " ")
+    return [part.strip() for part in text.split() if part.strip()]
+
+
 @employee_router.post("/worklogs")
 def create_employee_worklog(
     payload: WorklogBody,
@@ -195,23 +210,31 @@ def get_admin_worklogs(
     rows = res.data or []
     staff_by_id = _staff_map([str(row.get("user_id") or "") for row in rows])
 
-    task_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    task_map_by_id: dict[tuple[str, str, str], dict[str, Any]] = {}
+    task_map_by_name: dict[tuple[str, str, str], dict[str, Any]] = {}
     try:
         task_res = (
             supabase.table("cleaning_tasks")
-            .select("property_name,room_name,assigned_staff_id,assigned_staff_ids,cleaning_started_at,cleaning_completed_at")
+            .select("property_name,room_name,assigned_staff_id,assigned_staff_ids,assigned_staff_name,assigned_staff_names,cleaning_started_at,cleaning_completed_at")
             .eq("task_date", date)
             .execute()
         )
         for task in task_res.data or []:
-            property_name = str(task.get("property_name") or "")
-            room_name = str(task.get("room_name") or "")
-            staff_ids = task.get("assigned_staff_ids") if isinstance(task.get("assigned_staff_ids"), list) else []
+            property_key = _normalize_key(task.get("property_name"))
+            room_key = _normalize_key(task.get("room_name"))
+
+            staff_ids = [str(x) for x in (task.get("assigned_staff_ids") or []) if x]
             single_staff_id = str(task.get("assigned_staff_id") or "")
             if single_staff_id and single_staff_id not in staff_ids:
                 staff_ids.append(single_staff_id)
             for staff_id in staff_ids:
-                task_map[(str(staff_id), property_name, room_name)] = task
+                task_map_by_id[(staff_id, property_key, room_key)] = task
+
+            staff_names = _split_assignee_names(task.get("assigned_staff_names"))
+            if not staff_names:
+                staff_names = _split_assignee_names(task.get("assigned_staff_name"))
+            for staff_name in staff_names:
+                task_map_by_name[(_normalize_key(staff_name), property_key, room_key)] = task
     except Exception as e:
         logger.warning(f"cleaning task time lookup skipped: date={date} {e}")
 
@@ -219,6 +242,10 @@ def get_admin_worklogs(
     for row in rows:
         sid = str(row.get("user_id") or "")
         staff = staff_by_id.get(sid, {})
+        staff_name = str(row.get("staff_name") or staff.get("staff_name") or "")
+        property_key = _normalize_key(row.get("property_name"))
+        room_key = _normalize_key(row.get("room_name"))
+
         break_minutes = int(row.get("break_minutes") or 0)
         work_minutes = row.get("work_minutes")
         if work_minutes is None:
@@ -227,7 +254,11 @@ def get_admin_worklogs(
                 row.get("end_time") or "",
                 break_minutes,
             )
-        task = task_map.get((sid, str(row.get("property_name") or ""), str(row.get("room_name") or "")), {})
+
+        task = task_map_by_id.get((sid, property_key, room_key), {})
+        if not task and staff_name:
+            task = task_map_by_name.get((_normalize_key(staff_name), property_key, room_key), {})
+
         cleaning_started_at = task.get("cleaning_started_at") or ""
         cleaning_completed_at = task.get("cleaning_completed_at") or ""
         cleaning_minutes = 0
@@ -242,7 +273,7 @@ def get_admin_worklogs(
         worklogs.append({
             "id": row.get("id"),
             "user_id": sid,
-            "staff_name": row.get("staff_name") or staff.get("staff_name") or "",
+            "staff_name": staff_name,
             "staff_code": row.get("staff_code") or staff.get("staff_code") or "",
             "work_date": row.get("work_date") or date,
             "property_name": row.get("property_name") or "",
