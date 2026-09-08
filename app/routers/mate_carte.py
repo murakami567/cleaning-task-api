@@ -52,51 +52,31 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
-def _split_names(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(v).strip() for v in value if str(v).strip()]
-    if value is None:
-        return []
-    text = str(value).strip()
-    if not text:
-        return []
-    for separator in ["、", "，", ",", "/", "・"]:
-        text = text.replace(separator, " ")
-    return [x.strip() for x in text.split() if x.strip()]
-
-
-def _staff_matches_task(row: dict[str, Any], staff_id: str, staff_name: str = "") -> bool:
+def _staff_matches_task(row: dict[str, Any], staff_id: str) -> bool:
     ids = row.get("assigned_staff_ids") if isinstance(row.get("assigned_staff_ids"), list) else []
     if staff_id in [str(x) for x in ids]:
         return True
-    if str(row.get("assigned_staff_id") or "") == staff_id:
-        return True
-    if staff_name:
-        names = _split_names(row.get("assigned_staff_names"))
-        if not names:
-            names = _split_names(row.get("assigned_staff_name") or row.get("assignee_name") or row.get("assignee"))
-        if staff_name in names:
-            return True
-    return False
+    return str(row.get("assigned_staff_id") or "") == staff_id
 
 
-def _task_stats(rows: list[dict[str, Any]], staff_id: str, staff_name: str = "") -> dict[str, Any]:
+def _task_stats(rows: list[dict[str, Any]], staff_id: str) -> dict[str, Any]:
     matched: list[dict[str, Any]] = []
     durations: list[int] = []
     properties: list[str] = []
 
     for row in rows:
-        if not _staff_matches_task(row, staff_id, staff_name):
+        if not _staff_matches_task(row, staff_id):
             continue
-        completed = row.get("cleaning_completed_at")
-        if not completed and row.get("status") not in ["清掃完了", "完了", "チェック完了"]:
+        if str(row.get("status") or "") not in ["清掃完了", "チェック完了"]:
             continue
+
         matched.append(row)
         property_name = str(row.get("property_name") or "").strip()
         if property_name and property_name not in properties:
             properties.append(property_name)
+
         start_dt = _parse_dt(row.get("cleaning_started_at"))
-        end_dt = _parse_dt(completed)
+        end_dt = _parse_dt(row.get("cleaning_completed_at"))
         if start_dt and end_dt and end_dt >= start_dt:
             durations.append(round((end_dt - start_dt).total_seconds() / 60))
 
@@ -112,8 +92,6 @@ def _attendance_days(staff: dict[str, Any], start: str, end: str) -> int:
     staff_code = str(staff.get("staff_code") or "")
     dates: set[str] = set()
 
-    # メイトカルテの「出勤」は、まずシフト表の出勤予定を基準に数える。
-    # 遅刻も実質出勤日として扱う。
     try:
         shift_res = (
             supabase.table("shift_days")
@@ -136,7 +114,6 @@ def _attendance_days(staff: dict[str, Any], start: str, end: str) -> int:
     except Exception as e:
         logger.warning(f"mate shift attendance lookup failed: staff_id={staff_id} {e}")
 
-    # 実打刻がある日も補完する。
     try:
         q = (
             supabase.table("attendance_logs")
@@ -157,7 +134,6 @@ def _attendance_days(staff: dict[str, Any], start: str, end: str) -> int:
     except Exception as e:
         logger.warning(f"mate attendance_logs lookup failed: staff_id={staff_id} {e}")
 
-    # 実働報告がある日も補完する。
     try:
         res = (
             supabase.table("work_logs")
@@ -180,54 +156,20 @@ def _attendance_days(staff: dict[str, Any], start: str, end: str) -> int:
     return len(dates)
 
 
-def _worklog_cleaning_count(staff: dict[str, Any], start: str, end: str) -> int:
-    staff_id = str(staff.get("id") or "")
-    staff_code = str(staff.get("staff_code") or "")
-    unique_rooms: set[tuple[str, str, str]] = set()
-    try:
-        res = (
-            supabase.table("work_logs")
-            .select("work_date, user_id, staff_code, property_name, room_name, work_type")
-            .gte("work_date", start)
-            .lte("work_date", end)
-            .execute()
-        )
-        for row in res.data or []:
-            row_id = str(row.get("user_id") or "")
-            row_code = str(row.get("staff_code") or "")
-            if row_id != staff_id and (not staff_code or row_code != staff_code):
-                continue
-            if str(row.get("work_type") or "cleaning") not in ["cleaning", "清掃"]:
-                continue
-            work_date = str(row.get("work_date") or "")[:10]
-            property_name = str(row.get("property_name") or "").strip()
-            room_name = str(row.get("room_name") or "").strip()
-            if work_date and (property_name or room_name):
-                unique_rooms.add((work_date, property_name, room_name))
-    except Exception as e:
-        logger.warning(f"mate work_logs cleaning fallback failed: staff_id={staff_id} {e}")
-    return len(unique_rooms)
-
-
 def _fetch_task_stats(staff: dict[str, Any], start: str, end: str) -> dict[str, Any]:
     staff_id = str(staff.get("id") or "")
-    staff_name = str(staff.get("staff_name") or "")
     try:
         res = (
             supabase.table("cleaning_tasks")
-            .select("id, task_date, property_name, room_name, status, assigned_staff_ids, assigned_staff_id, assigned_staff_names, assigned_staff_name, cleaning_started_at, cleaning_completed_at")
+            .select("id, task_date, property_name, room_name, status, assigned_staff_ids, assigned_staff_id, cleaning_started_at, cleaning_completed_at")
             .gte("task_date", start)
             .lte("task_date", end)
             .execute()
         )
-        stats = _task_stats(list(res.data or []), staff_id, staff_name)
+        return _task_stats(list(res.data or []), staff_id)
     except Exception as e:
         logger.warning(f"mate cleaning task lookup failed: staff_id={staff_id} start={start} end={end} {e}")
-        stats = {"cleaning_count": 0, "average_cleaning_minutes": None, "worked_property_names": []}
-
-    worklog_count = _worklog_cleaning_count(staff, start, end)
-    stats["cleaning_count"] = max(int(stats.get("cleaning_count") or 0), worklog_count)
-    return stats
+        return {"cleaning_count": 0, "average_cleaning_minutes": None, "worked_property_names": []}
 
 
 def _pick_staff_value(staff: dict[str, Any], keys: list[str]):
@@ -380,17 +322,9 @@ def get_cleaning_summary(
     if not record_date:
         raise HTTPException(status_code=400, detail="record_date is required")
     try:
-        staff_res = (
-            supabase.table("staff_members")
-            .select("staff_name")
-            .eq("id", staff_id)
-            .limit(1)
-            .execute()
-        )
-        staff_name = str((staff_res.data or [{}])[0].get("staff_name") or "")
         res = (
             supabase.table("cleaning_tasks")
-            .select("id, property_name, room_name, task_date, status, assigned_staff_ids, assigned_staff_id, assigned_staff_names, assigned_staff_name, cleaning_started_at, cleaning_completed_at")
+            .select("id, property_name, room_name, task_date, status, assigned_staff_ids, assigned_staff_id, cleaning_started_at, cleaning_completed_at")
             .eq("task_date", record_date)
             .execute()
         )
@@ -404,7 +338,7 @@ def get_cleaning_summary(
     property_names: list[str] = []
 
     for row in res.data or []:
-        if not _staff_matches_task(row, staff_id, staff_name):
+        if not _staff_matches_task(row, staff_id):
             continue
         tasks.append(row)
         property_name = row.get("property_name")
