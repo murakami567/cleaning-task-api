@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import get_current_user_id
+from app.routers.facility_trouble import _sync_facility_non_cleaning_task
 
 router = APIRouter(tags=["facility-property-override"])
 logger = get_logger(__name__)
@@ -108,7 +109,11 @@ def create_facility_with_property_id(
     except Exception as e:
         logger.error(f"create_facility_with_property_id failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"設備情報の保存に失敗しました: {str(e)}")
-    return res.data[0] if res.data else payload
+
+    row = res.data[0] if res.data else payload
+    task = _sync_facility_non_cleaning_task(row)
+    row["non_cleaning_task_id"] = str(task.get("id") or "") if task else ""
+    return row
 
 
 @router.post("/facilities/update")
@@ -153,7 +158,13 @@ def update_facility_with_property_id(
     except Exception as e:
         logger.error(f"update_facility_with_property_id failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"設備情報の更新に失敗しました: {str(e)}")
-    return res.data[0] if res.data else payload
+
+    row = res.data[0] if res.data else {"id": facility_id, **payload}
+    if not row.get("id"):
+        row["id"] = facility_id
+    task = _sync_facility_non_cleaning_task(row)
+    row["non_cleaning_task_id"] = str(task.get("id") or "") if task else ""
+    return row
 
 
 @router.post("/api/employee/facility-troubles")
@@ -187,4 +198,11 @@ def create_employee_facility_trouble_with_property_id(
     except Exception as e:
         logger.error(f"create employee facility trouble failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"設備トラブル報告の保存に失敗しました: {str(e)}")
-    return {"message": "設備トラブルを報告しました。", "data": res.data[0] if res.data else payload}
+
+    row = res.data[0] if res.data else payload
+    task = _sync_facility_non_cleaning_task(row)
+    return {
+        "message": "設備トラブルを報告しました。",
+        "data": row,
+        "non_cleaning_task_id": str(task.get("id") or "") if task else "",
+    }
