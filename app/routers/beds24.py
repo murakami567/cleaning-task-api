@@ -3,6 +3,7 @@ import os
 
 from app.logger import get_logger
 from app.services.beds24_service import beds24_csv_sync_service
+from app.services.contractor_assignment_service import sync_existing_contractor_tasks
 
 router = APIRouter(tags=["beds24"])
 logger = get_logger(__name__)
@@ -30,6 +31,12 @@ def beds24_csv_sync(
     logger.info(f"beds24 sync started: from_date={from_date} to_date={to_date}")
     try:
         result = beds24_csv_sync_service(from_date=from_date, to_date=to_date)
+        try:
+            contractor_sync = sync_existing_contractor_tasks()
+            result["contractor_assignment_sync"] = contractor_sync
+        except Exception as sync_error:
+            logger.error(f"contractor sync after beds24 failed: {sync_error}", exc_info=True)
+            result["contractor_assignment_sync"] = {"ok": False, "error": str(sync_error)}
         logger.info("beds24 sync completed")
         return result
     except Exception as e:
