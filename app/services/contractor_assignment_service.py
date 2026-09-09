@@ -1,6 +1,32 @@
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db import supabase
+
+
+CONTRACTOR_ASSIGN_START_DAYS = 3
+CONTRACTOR_ASSIGN_END_DAYS = 7
+
+
+def _today_jst():
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).date()
+
+
+def contractor_assignment_range() -> tuple[str, str]:
+    """通常の自動割当と同じ「今日+3日〜今日+7日」。"""
+    today = _today_jst()
+    return (
+        (today + timedelta(days=CONTRACTOR_ASSIGN_START_DAYS)).isoformat(),
+        (today + timedelta(days=CONTRACTOR_ASSIGN_END_DAYS)).isoformat(),
+    )
+
+
+def _within_assignment_range(task_date: str | None) -> bool:
+    value = str(task_date or "")[:10]
+    if not value:
+        return False
+    start_date, end_date = contractor_assignment_range()
+    return start_date <= value <= end_date
 
 
 def _property_name_map() -> dict[str, str]:
@@ -36,7 +62,10 @@ def contractor_by_property_name() -> dict[str, dict[str, Any]]:
 
 
 def apply_contractor_to_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """新規清掃タスク用。対象物件なら委託業者を担当としてセットする。"""
+    """新規清掃タスク用。通常割当期間内の対象物件だけ委託業者をセットする。"""
+    if not _within_assignment_range(payload.get("task_date")):
+        return payload
+
     property_name = str(payload.get("property_name") or "").strip()
     staff = contractor_by_property_name().get(property_name)
     if not staff:
@@ -53,7 +82,8 @@ def apply_contractor_to_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def sync_existing_contractor_tasks(staff_id: str | None = None) -> dict[str, Any]:
-    """委託業者設定保存後、対象物件の既存未割当タスクへ固定割当を反映する。"""
+    """委託業者設定保存後、通常割当期間内の既存未割当タスクだけへ固定割当を反映する。"""
+    start_date, end_date = contractor_assignment_range()
     property_names = _property_name_map()
     contractors = _contractors()
     if staff_id:
@@ -72,6 +102,8 @@ def sync_existing_contractor_tasks(staff_id: str | None = None) -> dict[str, Any
                 supabase.table("cleaning_tasks")
                 .select("id,property_name,room_name,task_date,assignment_locked,assigned_staff_id,assigned_staff_ids,assigned_staff_name,assigned_staff_names")
                 .eq("property_name", property_name)
+                .gte("task_date", start_date)
+                .lte("task_date", end_date)
                 .execute()
             ).data or []
             for task in tasks:
@@ -101,4 +133,10 @@ def sync_existing_contractor_tasks(staff_id: str | None = None) -> dict[str, Any
                     "staff_name": name,
                 })
 
-    return {"ok": True, "updated_count": len(updated), "updated": updated}
+    return {
+        "ok": True,
+        "start_date": start_date,
+        "end_date": end_date,
+        "updated_count": len(updated),
+        "updated": updated,
+    }
