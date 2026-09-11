@@ -20,6 +20,7 @@ from app.routers.admin_portal import router as admin_portal_router
 from app.routers.admin_portal_construction_proxy import router as admin_portal_construction_proxy_router
 from app.routers.jinjer_sync_override import router as jinjer_sync_override_router
 from app.routers.jinjer_attendance_override import router as jinjer_attendance_override_router
+from app.routers.shift_upload_override import router as shift_upload_override_router
 from app.routers.jinjer import router as jinjer_router
 from app.routers.lineworks import router as lineworks_router
 from app.routers.notifications import router as notifications_router
@@ -79,6 +80,7 @@ app.include_router(admin_portal_router)
 app.include_router(admin_portal_construction_proxy_router)
 app.include_router(jinjer_sync_override_router)
 app.include_router(jinjer_attendance_override_router)
+app.include_router(shift_upload_override_router)
 app.include_router(jinjer_router)
 app.include_router(lineworks_router)
 app.include_router(notifications_router)
