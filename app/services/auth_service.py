@@ -52,6 +52,21 @@ def require_admin_or_leader(current_user: dict = Depends(get_current_user)) -> d
     return current_user
 
 
+def require_prep_access(current_user: dict = Depends(get_current_user)) -> dict:
+    """準備物確認画面の閲覧権限。"""
+    role = current_user.get("role")
+    if role not in [
+        "admin",
+        "sub_admin",
+        "leader",
+        "operation",
+        "payroll_admin",
+        "prep_viewer",
+    ]:
+        raise HTTPException(status_code=403, detail="準備物確認画面にアクセスできません。")
+    return current_user
+
+
 def require_operational_write(current_user: dict = Depends(get_current_user)) -> dict:
     """タスク・設備・スケジュールなど日常運用機能の編集権限。"""
     role = current_user.get("role")
