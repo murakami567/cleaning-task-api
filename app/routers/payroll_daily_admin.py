@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import require_payroll_access
 
-router = APIRouter(tags=["payroll-daily-admin"])
+router = APIRouter(tags=["payroll-daily-admin"], dependencies=[Depends(require_payroll_access)])
 logger = get_logger(__name__)
 
 
