@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from datetime import date
 import calendar
 from collections import defaultdict
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import require_payroll_access
 from app.services.payroll_daily_service import recalculate_piece_daily_payroll
 
-router = APIRouter(tags=["payroll"])
+router = APIRouter(tags=["payroll"], dependencies=[Depends(require_payroll_access)])
 logger = get_logger(__name__)
 
 
