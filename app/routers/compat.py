@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
-from app.services.auth_service import require_shift_worklog_write
+from app.services.auth_service import require_operational_write
 
 router = APIRouter(tags=["compat"])
 logger = get_logger(__name__)
@@ -138,12 +138,12 @@ def get_shifts(shift_date: str | None = None):
 
 
 @router.post("/shifts/create_day")
-def create_shift_day(shift_date: str = Body(...), note: str = Body(""), current_user: dict = Depends(require_shift_worklog_write)):
+def create_shift_day(shift_date: str = Body(...), note: str = Body(""), current_user: dict = Depends(require_operational_write)):
     return get_or_create_shift_day(shift_date=shift_date, note=note, current_user=current_user)
 
 
 @router.post("/shifts/get_or_create_day")
-def get_or_create_shift_day(shift_date: str = Body(...), note: str = Body(""), current_user: dict = Depends(require_shift_worklog_write)):
+def get_or_create_shift_day(shift_date: str = Body(...), note: str = Body(""), current_user: dict = Depends(require_operational_write)):
     try:
         existing = (
             supabase.table("shift_days")
@@ -175,7 +175,7 @@ def upsert_shift_entry(
     end_time: str | None = Body(None),
     assigned_area: str | None = Body(None),
     note: str | None = Body(None),
-    current_user: dict = Depends(require_shift_worklog_write),
+    current_user: dict = Depends(require_operational_write),
 ):
     try:
         existing = (
@@ -230,7 +230,7 @@ def get_staff_schedules(shift_date: str):
 
 
 @router.post("/staff-schedules/upsert")
-def upsert_staff_schedule(body: dict[str, Any] = Body(...), current_user: dict = Depends(require_shift_worklog_write)):
+def upsert_staff_schedule(body: dict[str, Any] = Body(...), current_user: dict = Depends(require_operational_write)):
     """旧フロント互換。日付から shift_day を作成し、対象スタッフの予定を更新する。"""
     shift_date = _date_key(body.get("shift_date") or body.get("date") or body.get("work_date"))
     staff_id = str(body.get("staff_id") or body.get("user_id") or "").strip()
