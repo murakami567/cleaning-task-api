@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import require_operational_write, require_task_write
 
 router = APIRouter(tags=["tasks"])
 logger = get_logger(__name__)
@@ -118,6 +119,7 @@ def create_task(
     task_date: str = Body(...),
     status: str = Body("未着手"),
     note: str = Body(""),
+    current_user: dict = Depends(require_operational_write),
 ):
     payload = {
         "property_name": property_name,
@@ -162,6 +164,7 @@ def update_task(
     assignment_locked: bool | None = Body(None),
     early_checkin_time: str | None = Body(None),
     late_checkout_time: str | None = Body(None),
+    current_user: dict = Depends(require_task_write),
 ):
     payload = {}
 
@@ -284,6 +287,7 @@ def create_non_cleaning_task(
     checker_id: str | None = Body(None),
     checker_name: str | None = Body(None),
     note: str = Body(""),
+    current_user: dict = Depends(require_operational_write),
 ):
     payload = {
         "task_date": task_date,
@@ -327,6 +331,7 @@ def update_non_cleaning_task(
     checker_id: str | None = Body(None),
     checker_name: str | None = Body(None),
     note: str | None = Body(None),
+    current_user: dict = Depends(require_task_write),
 ):
     payload = {}
     if task_date is not None:
@@ -390,12 +395,13 @@ def delete_non_cleaning_task_post(
     body: Any = Body(default=None),
     task_id: str | None = Query(default=None),
     id: str | None = Query(default=None),
+    current_user: dict = Depends(require_operational_write),
 ):
     return _delete_non_cleaning_task(_extract_task_id(body=body, task_id=task_id, id=id))
 
 
 @router.delete("/non-cleaning-tasks/{task_id}")
-def delete_non_cleaning_task_by_path(task_id: str):
+def delete_non_cleaning_task_by_path(task_id: str, current_user: dict = Depends(require_operational_write)):
     return _delete_non_cleaning_task(task_id)
 
 
@@ -403,5 +409,6 @@ def delete_non_cleaning_task_by_path(task_id: str):
 def delete_non_cleaning_task_delete(
     task_id: str | None = Query(default=None),
     id: str | None = Query(default=None),
+    current_user: dict = Depends(require_operational_write),
 ):
     return _delete_non_cleaning_task(_extract_task_id(task_id=task_id, id=id))
