@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.auth_service import require_task_write
 
 router = APIRouter(tags=["tasks"])
 logger = get_logger(__name__)
@@ -26,6 +27,7 @@ def update_task_with_times(
     checked_by_name: str | None = Body(None),
     early_checkin_time: str | None = Body(None),
     late_checkout_time: str | None = Body(None),
+    current_user: dict = Depends(require_task_write),
 ):
     """
     清掃タスク更新。
