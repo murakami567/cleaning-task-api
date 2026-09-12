@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
-from app.services.auth_service import get_current_user_id
+from app.services.auth_service import get_current_user_id, require_operational_write
 
 router = APIRouter(tags=["facility-trouble"])
 logger = get_logger(__name__)
@@ -168,6 +168,7 @@ def create_facility(
     report_date: str | None = Body(None),
     reporter_name: str | None = Body(None),
     photo_url: str | None = Body(None),
+    current_user: dict = Depends(require_operational_write),
 ):
     normalized_status = _normalize_status(status)
     payload = {
@@ -213,6 +214,7 @@ def update_facility(
     report_date: str | None = Body(None),
     reporter_name: str | None = Body(None),
     photo_url: str | None = Body(None),
+    current_user: dict = Depends(require_operational_write),
 ):
     normalized_status = _normalize_status(status) if status is not None else None
     payload: dict[str, Any] = {}
