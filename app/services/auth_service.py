@@ -97,7 +97,7 @@ def require_shift_write(current_user: dict = Depends(get_current_user)) -> dict:
 def require_worklog_write(current_user: dict = Depends(get_current_user)) -> dict:
     """実働報告の修正・削除権限。"""
     role = current_user.get("role")
-    if role not in ["admin", "sub_admin"]:
+    if role not in ["admin", "sub_admin", "payroll_admin"]:
         raise HTTPException(status_code=403, detail="このアカウントは閲覧専用です。")
     return current_user
 
