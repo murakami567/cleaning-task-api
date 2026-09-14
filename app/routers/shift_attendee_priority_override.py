@@ -39,3 +39,41 @@ def get_shifts_with_assignment_priority(shift_date: str | None = None):
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail="shifts fetch failed")
+
+@router.get("/shifts/batch")
+def get_shifts_batch_with_assignment_priority(shift_dates: str):
+    """複数日分の担当者候補を1回のDB問い合わせで返す。"""
+    raw_dates = [value.strip() for value in shift_dates.split(",") if value.strip()]
+    target_dates = list(dict.fromkeys(raw_dates))
+
+    if not target_dates:
+        return []
+    if len(target_dates) > 180:
+        raise HTTPException(status_code=400, detail="shift_dates must contain 180 dates or fewer")
+
+    try:
+        for value in target_dates:
+            date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="shift_dates must use YYYY-MM-DD format")
+
+    try:
+        res = (
+            supabase.table("shift_days")
+            .select(SHIFT_DAY_SELECT_WITH_PRIORITY)
+            .in_("shift_date", target_dates)
+            .order("shift_date")
+            .execute()
+        )
+        rows = res.data or []
+        logger.info(
+            f"priority shift batch fetch: requested={len(target_dates)} days={len(rows)}"
+        )
+        return rows
+    except Exception as e:
+        logger.error(
+            f"priority shift batch fetch failed: requested={len(target_dates)} {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="shift batch fetch failed")
+
