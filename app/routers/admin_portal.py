@@ -23,12 +23,8 @@ def _calc_towel_count(property_name: str, next_guest_count, next_stay_nights):
     except Exception:
         return "-"
     if guests <= 0 or nights <= 0:
-        return "-"
-    if nights >= 8:
-        return guests * 3
-    if nights >= 3:
-        return guests * 2
-    return guests
+        return 0
+    return min(nights, 3) * guests
 
 
 router = APIRouter(prefix="/api/admin-portal", tags=["admin-portal"])
