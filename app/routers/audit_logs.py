@@ -74,9 +74,10 @@ def account_permission_audit(current_user: dict = Depends(require_master_admin))
 
 @router.get("/api/master/system-monitor")
 def system_monitor(current_user: dict = Depends(require_master_admin)):
-    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=24)
     try:
-        res = supabase.table("audit_logs").select("id,actor_name,actor_role,source,action,page,target_type,target_name,result,error_message,metadata,created_at").gte("created_at", since).order("created_at", desc=True).limit(1000).execute()
+        res = supabase.table("audit_logs").select("id,actor_name,actor_role,source,action,page,target_type,target_name,result,error_message,metadata,created_at").gte("created_at", since.isoformat()).order("created_at", desc=True).limit(5000).execute()
     except Exception as exc:
         logger.error(f"system monitor read failed master_user_id={current_user.get('user_id')}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="システム監視情報の取得に失敗しました。")
@@ -87,4 +88,23 @@ def system_monitor(current_user: dict = Depends(require_master_admin)):
     for row in failures:
         source = row.get("source") or "system"
         source_counts[source] = source_counts.get(source, 0) + 1
-    return {"status": "normal" if not failures else ("warning" if len(failures) < 10 else "critical"), "period_hours": 24, "summary": {"operations": len(rows), "failures": len(failures), "auth_failures": len(auth_failures), "latest_failure": failures[0].get("created_at") if failures else None}, "source_counts": source_counts, "failures": failures[:100]}
+
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    first_hour = current_hour - timedelta(hours=23)
+    buckets = {}
+    for i in range(24):
+        hour = first_hour + timedelta(hours=i)
+        key = hour.isoformat()
+        buckets[key] = {"hour": key, "operations": 0, "failures": 0}
+    for row in rows:
+        try:
+            created = datetime.fromisoformat(str(row.get("created_at", "")).replace("Z", "+00:00")).astimezone(timezone.utc)
+            hour = created.replace(minute=0, second=0, microsecond=0)
+            key = hour.isoformat()
+            if key in buckets:
+                buckets[key]["operations"] += 1
+                if row.get("result") == "failure": buckets[key]["failures"] += 1
+        except (TypeError, ValueError):
+            continue
+
+    return {"status": "normal" if not failures else ("warning" if len(failures) < 10 else "critical"), "period_hours": 24, "summary": {"operations": len(rows), "failures": len(failures), "auth_failures": len(auth_failures), "latest_failure": failures[0].get("created_at") if failures else None}, "source_counts": source_counts, "hourly_trend": list(buckets.values()), "failures": failures[:100]}
