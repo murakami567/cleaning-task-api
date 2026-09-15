@@ -2,6 +2,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.audit_service import write_audit_log
 from app.services.auth_service import require_admin_write
 from app.services.contractor_assignment_service import sync_existing_contractor_tasks
 
@@ -25,11 +26,7 @@ def get_staffs():
         staff_name = str(row.get("staff_name") or "").strip()
         if not staff_id or not staff_name or staff_id in existing_ids:
             continue
-        staff_rows.append({
-            "id": staff_id, "staff_code": "", "staff_name": staff_name, "role": "staff",
-            "sort_order": 100000 + index, "is_active": row.get("is_active") is not False,
-            "note": "給与設定から補完",
-        })
+        staff_rows.append({"id": staff_id, "staff_code": "", "staff_name": staff_name, "role": "staff", "sort_order": 100000 + index, "is_active": row.get("is_active") is not False, "note": "給与設定から補完"})
         existing_ids.add(staff_id)
     staff_rows.sort(key=lambda row: (row.get("sort_order") if row.get("sort_order") is not None else 999999, str(row.get("staff_name") or "")))
     logger.info(f"accounts get_staffs: staff_members={len(staff_res.data or [])} payroll_settings={len(payroll_res.data or [])} merged={len(staff_rows)}")
@@ -49,17 +46,21 @@ def upsert_staff(
     priority_ids = list(dict.fromkeys(unchecked_property_ids or []))
     priority_set = set(priority_ids)
     normal_ids = [property_id for property_id in list(dict.fromkeys(available_property_ids or [])) if property_id not in priority_set]
-    payload = {
-        "staff_code": staff_code, "staff_name": staff_name, "role": role, "sort_order": sort_order,
-        "is_active": is_active, "note": note, "available_property_ids": normal_ids,
-        "unchecked_property_ids": priority_ids,
-    }
+    payload = {"staff_code": staff_code, "staff_name": staff_name, "role": role, "sort_order": sort_order, "is_active": is_active, "note": note, "available_property_ids": normal_ids, "unchecked_property_ids": priority_ids}
     if daily_capacity_point is not None: payload["daily_capacity_point"] = max(0, int(daily_capacity_point))
     if solo_enabled is not None: payload["solo_enabled"] = solo_enabled
     if shared_enabled is not None: payload["shared_enabled"] = shared_enabled
     if password is not None: payload["password"] = password
     if area is not None: payload["area"] = area
     if lineworks_channel_id is not None: payload["lineworks_channel_id"] = lineworks_channel_id
+
+    before = None
+    if staff_id:
+        try:
+            before_res = supabase.table("staff_members").select("*").eq("id", staff_id).limit(1).execute()
+            before = before_res.data[0] if before_res.data else None
+        except Exception as e:
+            logger.warning(f"accounts before snapshot failed: staff_id={staff_id} {e}")
 
     try:
         if staff_id:
@@ -68,6 +69,7 @@ def upsert_staff(
             res = supabase.table("staff_members").insert(payload).execute()
     except Exception as e:
         logger.error(f"accounts upsert_staff failed: staff_id={staff_id} {e}", exc_info=True)
+        write_audit_log(actor_id=current_user.get("user_id"), actor_role=current_user.get("role"), source="admin", action="staff_update" if staff_id else "staff_create", page="accounts", target_type="staff", target_id=staff_id, target_name=staff_name, before_data=before, after_data=payload, result="failure", error_message=str(e))
         raise HTTPException(status_code=500, detail="staff save failed")
     if not res.data:
         raise HTTPException(status_code=500, detail="staff save failed")
@@ -81,6 +83,7 @@ def upsert_staff(
             logger.error(f"contractor sync after staff save failed: staff_id={saved.get('id')} {e}", exc_info=True)
             saved["contractor_assignment_sync"] = {"ok": False, "error": str(e)}
 
+    write_audit_log(actor_id=current_user.get("user_id"), actor_role=current_user.get("role"), source="admin", action="staff_update" if staff_id else "staff_create", page="accounts", target_type="staff", target_id=str(saved.get("id")), target_name=saved.get("staff_name"), before_data=before, after_data=saved)
     logger.info(f"accounts upsert_staff: staff_id={saved.get('id')}")
     return saved
 
