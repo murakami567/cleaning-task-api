@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.logger import get_logger
+from app.services.audit_middleware import audit_write_middleware
 from app.routers.accounts import router as accounts_router
 from app.routers.task_times import router as task_times_router
 from app.routers.facility_property_override import router as facility_property_router
@@ -51,6 +52,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 認証済みユーザーによる重要な更新操作をサーバー側で監査する。
+app.middleware("http")(audit_write_middleware)
 
 
 @app.exception_handler(Exception)
