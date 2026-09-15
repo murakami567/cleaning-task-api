@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from app.db import supabase
 from app.logger import get_logger
+from app.services.audit_service import write_audit_log
 from app.services.auth_service import create_access_token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -44,21 +45,30 @@ def login(payload: LoginRequest):
 
     if payload.role == "admin_portal":
         if user_role not in ["master_admin", "admin", "leader", "sub_admin", "operation", "payroll_admin", "prep_viewer"]:
-            logger.warning(
-                f"login failed: insufficient role login_id={payload.login_id} role={user_role}"
-            )
+            logger.warning(f"login failed: insufficient role login_id={payload.login_id} role={user_role}")
             raise HTTPException(status_code=403, detail="管理画面にログインできません。")
     elif payload.role == "employee_portal":
         pass
     elif payload.role:
         if user_role != payload.role:
-            logger.warning(
-                f"login failed: role mismatch login_id={payload.login_id} role={user_role}"
-            )
+            logger.warning(f"login failed: role mismatch login_id={payload.login_id} role={user_role}")
             raise HTTPException(status_code=403, detail="この画面にログインできません。")
 
     access_token = create_access_token(str(user["id"]), user_role or "")
     logger.info(f"login success: login_id={payload.login_id} role={user_role}")
+
+    source = "employee" if payload.role == "employee_portal" else "admin"
+    write_audit_log(
+        actor_id=str(user["id"]),
+        actor_role=user_role,
+        source=source,
+        action="login",
+        page="login",
+        target_type="session",
+        target_id=str(user["id"]),
+        target_name=user.get("staff_name"),
+        metadata={"portal": payload.role},
+    )
 
     return {
         "access_token": access_token,
