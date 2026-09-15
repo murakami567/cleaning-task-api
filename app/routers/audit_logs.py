@@ -87,3 +87,36 @@ def list_audit_logs(
         logger.error(f"audit log read failed master_user_id={current_user.get('user_id')}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="監査ログの取得に失敗しました。")
     return {"items": res.data or [], "limit": limit, "offset": offset}
+
+
+@router.get("/api/master/account-audit")
+def account_permission_audit(current_user: dict = Depends(require_master_admin)):
+    try:
+        staff_res = (
+            supabase.table("staff_members")
+            .select("id,staff_code,staff_name,role,is_active,created_at,updated_at")
+            .order("staff_code")
+            .execute()
+        )
+        history_res = (
+            supabase.table("audit_logs")
+            .select("id,actor_name,actor_role,action,target_id,target_name,before_data,after_data,result,created_at")
+            .in_("action", ["staff_create", "staff_update"])
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"account audit read failed master_user_id={current_user.get('user_id')}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="アカウント・権限監査情報の取得に失敗しました。")
+
+    staff = staff_res.data or []
+    privileged_roles = {"master_admin", "admin", "sub_admin", "payroll_admin"}
+    summary = {
+        "total": len(staff),
+        "active": sum(1 for row in staff if row.get("is_active") is True),
+        "inactive": sum(1 for row in staff if row.get("is_active") is not True),
+        "privileged": sum(1 for row in staff if row.get("role") in privileged_roles),
+        "master_admin": sum(1 for row in staff if row.get("role") == "master_admin"),
+    }
+    return {"summary": summary, "accounts": staff, "history": history_res.data or []}
