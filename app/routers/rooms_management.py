@@ -253,7 +253,11 @@ def update_room(
 
 
 @router.post("/rooms/delete")
-def delete_room(room_id: str = Body(...), current_user: dict = Depends(require_admin_write)):
+def delete_room(
+    room_id: str = Body(..., embed=True),
+    current_user: dict = Depends(require_admin_write),
+):
+    room_id = _text(room_id)
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
     try:
