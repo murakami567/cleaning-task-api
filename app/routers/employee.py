@@ -608,12 +608,8 @@ def calc_towel_display(property_name: str, next_guest_count: int, next_stay_nigh
     nights = int(next_stay_nights or 0)
 
     if guests <= 0 or nights <= 0:
-        return "-"
-    if nights >= 8:
-        return guests * 3
-    if nights >= 3:
-        return guests * 2
-    return guests
+        return 0
+    return min(nights, 3) * guests
 
 
 def count_today(tasks: list[dict[str, Any]]):
