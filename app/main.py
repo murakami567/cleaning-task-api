@@ -11,6 +11,7 @@ from app.routers.tasks import router as tasks_router
 from app.routers.order_management_sync import router as order_management_sync_router
 from app.routers.beds24 import router as beds24_router
 from app.routers.auth import router as auth_router
+from app.routers.audit_logs import router as audit_logs_router
 from app.routers.employee_tasks_override import router as employee_tasks_router
 from app.routers.employee import router as employee_router
 from app.routers.admin_home_active_override import router as admin_home_active_router
@@ -71,6 +72,7 @@ app.include_router(tasks_router)
 app.include_router(order_management_sync_router)
 app.include_router(beds24_router)
 app.include_router(auth_router)
+app.include_router(audit_logs_router)
 app.include_router(employee_tasks_router)
 app.include_router(employee_router)
 app.include_router(admin_home_active_router)
