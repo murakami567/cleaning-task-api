@@ -1,6 +1,9 @@
+import json
+
 import jwt
 from fastapi import Request
 
+from app.db import supabase
 from app.services.audit_service import write_audit_log
 from app.services.auth_service import JWT_ALGORITHM, JWT_SECRET
 
@@ -26,6 +29,11 @@ AUDIT_PREFIXES = (
 )
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+TASK_AUDIT_FIELDS = {
+    "task_date", "status", "note", "assigned_staff_ids", "assigned_staff_names",
+    "assigned_staff_id", "assigned_staff_name", "checker_id", "checker_name",
+    "assignment_locked", "early_checkin_time", "late_checkout_time",
+}
 
 
 def _actor_from_request(request: Request):
@@ -63,9 +71,48 @@ def _event_for(request: Request):
     return None
 
 
+def _fetch_task(task_id: str | None):
+    if not task_id:
+        return None
+    try:
+        res = supabase.table("cleaning_tasks").select("*").eq("id", task_id).limit(1).execute()
+        return dict(res.data[0]) if res.data else None
+    except Exception:
+        return None
+
+
+def _task_snapshot(row: dict | None):
+    if not row:
+        return None
+    return {key: row.get(key) for key in TASK_AUDIT_FIELDS}
+
+
+def _task_target_name(row: dict | None):
+    if not row:
+        return None
+    prop = str(row.get("property_name") or "").strip()
+    room = str(row.get("room_name") or "").strip()
+    if prop and room:
+        return f"{prop} / {room}"
+    return prop or room or None
+
+
 async def audit_write_middleware(request: Request, call_next):
     event = _event_for(request)
     actor = _actor_from_request(request) if event else None
+
+    task_id = None
+    task_before = None
+    if event and actor and request.url.path == "/tasks/update":
+        try:
+            raw_body = await request.body()
+            body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            if isinstance(body, dict):
+                task_id = str(body.get("task_id") or "").strip() or None
+                task_before = _fetch_task(task_id)
+        except Exception:
+            task_id = None
+            task_before = None
 
     try:
         response = await call_next(request)
@@ -79,6 +126,9 @@ async def audit_write_middleware(request: Request, call_next):
                 action=action,
                 page=page,
                 target_type=target_type,
+                target_id=task_id if action == "task_update" else None,
+                target_name=_task_target_name(task_before) if action == "task_update" else None,
+                before_data=_task_snapshot(task_before) if action == "task_update" else None,
                 result="failure",
                 error_message=str(exc),
                 metadata={"method": request.method, "path": request.url.path},
@@ -88,6 +138,16 @@ async def audit_write_middleware(request: Request, call_next):
     if event and actor:
         action, target_type, page = event
         success = response.status_code < 400
+
+        task_after = _fetch_task(task_id) if action == "task_update" and success else None
+        before_snapshot = _task_snapshot(task_before) if action == "task_update" else None
+        after_snapshot = _task_snapshot(task_after) if action == "task_update" else None
+
+        # UIから同じ値の更新APIが連続して呼ばれる場合は監査ログを増やさない。
+        # 実際にDB上の監査対象項目が変化した更新だけを残す。
+        if action == "task_update" and success and before_snapshot == after_snapshot:
+            return response
+
         write_audit_log(
             actor_id=actor["user_id"],
             actor_role=actor.get("role"),
@@ -95,6 +155,10 @@ async def audit_write_middleware(request: Request, call_next):
             action=action,
             page=page,
             target_type=target_type,
+            target_id=task_id if action == "task_update" else None,
+            target_name=_task_target_name(task_after or task_before) if action == "task_update" else None,
+            before_data=before_snapshot,
+            after_data=after_snapshot,
             result="success" if success else "failure",
             error_message=None if success else f"HTTP {response.status_code}",
             metadata={
