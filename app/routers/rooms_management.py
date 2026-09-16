@@ -3,7 +3,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_write
-from app.services.facility_master_sync import sync_facility_master
+from app.services.facility_master_sync import sync_facility_room
 
 router = APIRouter(tags=["rooms"])
 logger = get_logger(__name__)
@@ -33,7 +33,7 @@ def create_room(property_id:str=Body(...), room_name:str=Body(...), room_code:st
     except Exception as e:
         logger.error(f"create_room failed: property_id={property_id} room_name={room_name} {e}",exc_info=True); raise HTTPException(status_code=500,detail="room create failed")
     if not res.data: raise HTTPException(status_code=500,detail="room create failed")
-    sync_facility_master("room_created")
+    sync_facility_room(str(res.data[0]["id"]), "room_created")
     return res.data[0]
 
 @router.post("/rooms/bulk-create")
@@ -53,12 +53,12 @@ def bulk_create_rooms(property_id:str=Body(...), room_names:list[str]=Body(...),
     try: res=supabase.table("rooms").insert(rows).execute()
     except Exception as e:
         logger.error(f"bulk_create_rooms failed: property_id={property_id} count={len(rows)} {e}",exc_info=True); raise HTTPException(status_code=500,detail="rooms bulk create failed")
-    sync_facility_master("rooms_bulk_created")
+    for row in res.data or []:
+        sync_facility_room(str(row["id"]), "rooms_bulk_created")
     return {"ok":True,"count":len(res.data or []),"data":res.data or []}
 
 @router.post("/rooms/update")
 def update_room(room_id:str=Body(...), property_id:str|None=Body(None), room_name:str|None=Body(None), room_code:str|None=Body(None), room_key:str|None=Body(None), normalized_room_key:str|None=Body(None), capacity:int|None=Body(None), room_sort_order:int|None=Body(None), is_active:bool|None=Body(None), prep_d:int|None=Body(None), prep_s:int|None=Body(None), prep_spare_s:int|None=Body(None), prep_ta:int|None=Body(None), cleaning_score:int|None=Body(None), keybox_number:str|None=Body(None), spare_key_number:str|None=Body(None), mailbox_number:str|None=Body(None), wifi_ssid:str|None=Body(None), wifi_password:str|None=Body(None), note:str|None=Body(None), early_checkin_fee:int|None=Body(None), late_checkout_fee:int|None=Body(None), current_user:dict=Depends(require_admin_write)):
-    payload={}
     values={"property_id":property_id,"room_name":room_name.strip() if room_name is not None else None,"room_code":room_code.strip() if room_code is not None else None,"room_key":room_key.strip() if room_key is not None else None,"normalized_room_key":normalized_room_key.strip() if normalized_room_key is not None else None,"capacity":capacity,"room_sort_order":room_sort_order,"is_active":is_active,"prep_d":prep_d,"prep_s":prep_s,"prep_spare_s":prep_spare_s,"prep_ta":prep_ta,"cleaning_score":_score(cleaning_score) if cleaning_score is not None else None,"keybox_number":_text(keybox_number) if keybox_number is not None else None,"spare_key_number":_text(spare_key_number) if spare_key_number is not None else None,"mailbox_number":_text(mailbox_number) if mailbox_number is not None else None,"wifi_ssid":_text(wifi_ssid) if wifi_ssid is not None else None,"wifi_password":_text(wifi_password) if wifi_password is not None else None,"note":_text(note) if note is not None else None,"early_checkin_fee":max(_int_or_default(early_checkin_fee,0),0) if early_checkin_fee is not None else None,"late_checkout_fee":max(_int_or_default(late_checkout_fee,0),0) if late_checkout_fee is not None else None}
     payload={k:v for k,v in values.items() if v is not None}
     if not room_id: raise HTTPException(status_code=400,detail="room_id is required")
@@ -66,7 +66,7 @@ def update_room(room_id:str=Body(...), property_id:str|None=Body(None), room_nam
     try: res=supabase.table("rooms").update(payload).eq("id",room_id).execute()
     except Exception as e:
         logger.error(f"update_room failed: room_id={room_id} {e}",exc_info=True); raise HTTPException(status_code=500,detail="room update failed")
-    sync_facility_master("room_updated")
+    sync_facility_room(room_id, "room_updated")
     return {"ok":True,"room_id":room_id,"updated":payload,"data":res.data}
 
 @router.post("/rooms/delete")
@@ -76,5 +76,5 @@ def delete_room(room_id:str=Body(...,embed=True), current_user:dict=Depends(requ
     try: res=supabase.table("rooms").delete().eq("id",room_id).execute()
     except Exception as e:
         logger.error(f"delete_room failed: room_id={room_id} {e}",exc_info=True); raise HTTPException(status_code=500,detail="room delete failed")
-    sync_facility_master("room_deleted")
+    sync_facility_room(room_id, "room_deleted")
     return {"ok":True,"room_id":room_id,"data":res.data or []}
