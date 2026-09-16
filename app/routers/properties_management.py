@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from app.db import supabase
 from app.logger import get_logger
 from app.services.auth_service import require_admin_write
-from app.services.facility_master_sync import sync_facility_master
+from app.services.facility_master_sync import sync_facility_property
 
 router = APIRouter(tags=["properties"])
 logger = get_logger(__name__)
@@ -65,7 +65,7 @@ def create_property(property_code: str=Body(...), property_name: str=Body(...), 
     except Exception as e:
         logger.error(f"create_property failed: {e}", exc_info=True); raise HTTPException(status_code=500, detail="property creation failed")
     if not res.data: raise HTTPException(status_code=500, detail="property creation failed")
-    sync_facility_master("property_created")
+    sync_facility_property(str(res.data[0]["id"]), "property_created")
     return res.data[0]
 
 @router.post("/properties/update")
@@ -88,7 +88,7 @@ def update_property(property_id: str=Body(...), property_code: str|None=Body(Non
     try: res=supabase.table("properties").update(payload).eq("id",property_id).execute()
     except Exception as e:
         logger.error(f"update_property failed: property_id={property_id} payload={payload} {e}", exc_info=True); raise HTTPException(status_code=500, detail=f"property update failed: {str(e)}")
-    sync_facility_master("property_updated")
+    sync_facility_property(property_id, "property_updated")
     return {"ok":True,"property_id":property_id,"updated":payload,"data":res.data}
 
 @router.post("/properties/reorder")
