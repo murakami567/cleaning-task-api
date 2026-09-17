@@ -151,7 +151,7 @@ def get_admin_worklogs(date_param: str | None = Query(default=None, alias="date"
             "id": row.get("id"),
             "user_id": sid,
             "staff_name": row.get("staff_name") or staff.get("staff_name") or "",
-            "staff_code": row.get("staff_code") or staff.get("staff_code") or "",
+            "staff_code": row.get("staff_code") or "",
             "work_date": row.get("work_date") or work_date,
             "property_name": property_name,
             "room_name": room_name,
@@ -179,18 +179,29 @@ def update_admin_worklog(payload: WorklogUpdateBody, current_user: dict = Depend
 
     table_name = _find_worklog_table(payload.worklog_id)
     break_minutes = max(int(payload.break_minutes or 0), 0)
-    update_data = {
-        "work_date": payload.work_date,
-        "property_name": payload.property_name.strip(),
-        "room_name": payload.room_name.strip(),
-        "work_start_time": payload.work_start_time or payload.start_time,
-        "start_time": payload.start_time,
-        "end_time": payload.end_time,
-        "break_minutes": break_minutes,
-        "work_type": payload.work_type or "cleaning",
-        "note": payload.note,
-        "work_minutes": _minutes_between(payload.start_time, payload.end_time, break_minutes),
-    }
+
+    # worklogs and work_logs are legacy/current tables with different schemas.
+    # Only send columns that actually exist on the detected table.
+    if table_name == "worklogs":
+        update_data = {
+            "work_date": payload.work_date,
+            "property_name": payload.property_name.strip(),
+            "room_name": payload.room_name.strip(),
+            "work_start_time": payload.work_start_time or payload.start_time,
+            "start_time": payload.start_time,
+            "end_time": payload.end_time,
+            "break_minutes": break_minutes,
+            "work_type": payload.work_type or "cleaning",
+            "note": payload.note,
+        }
+    else:
+        update_data = {
+            "work_date": payload.work_date,
+            "break_minutes": break_minutes,
+            "work_type": payload.work_type or "cleaning",
+            "note": payload.note,
+            "work_minutes": _minutes_between(payload.start_time, payload.end_time, break_minutes),
+        }
 
     try:
         res = supabase.table(table_name).update(update_data).eq("id", payload.worklog_id).execute()
