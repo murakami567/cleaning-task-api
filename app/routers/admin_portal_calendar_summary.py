@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.db import supabase
 from app.logger import get_logger
@@ -20,6 +21,11 @@ EXCLUDED_CLEANING_STATUSES = {
 }
 
 PAGE_SIZE = 1000
+
+
+class CalendarMessageBody(BaseModel):
+    target_date: str
+    message: str
 
 
 def _month_range(year: int, month: int) -> tuple[str, str]:
@@ -115,3 +121,87 @@ def get_company_calendar_summary(
         "cleaning_counts": dict(cleaning_counts),
         "messages": messages,
     }
+
+
+def _validate_message(payload: CalendarMessageBody) -> tuple[str, str]:
+    target_date = payload.target_date.strip()
+    message = payload.message.strip()
+    if not target_date:
+        raise HTTPException(status_code=400, detail="対象日は必須です。")
+    try:
+        date.fromisoformat(target_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="対象日の形式が正しくありません。")
+    if not message:
+        raise HTTPException(status_code=400, detail="連絡内容は必須です。")
+    return target_date, message
+
+
+@router.post("/calendar-messages")
+def create_calendar_message(
+    payload: CalendarMessageBody,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    target_date, message = _validate_message(payload)
+    user_id = current_user["user_id"]
+    try:
+        res = (
+            supabase
+            .table("portal_messages")
+            .insert({
+                "target_date": target_date,
+                "message": message,
+                "updated_by": user_id,
+            })
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"create_calendar_message failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="連絡事項の登録に失敗しました。")
+    return {"ok": True, "data": res.data}
+
+
+@router.put("/calendar-messages/{message_id}")
+def update_calendar_message(
+    message_id: str,
+    payload: CalendarMessageBody,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    target_date, message = _validate_message(payload)
+    user_id = current_user["user_id"]
+    try:
+        res = (
+            supabase
+            .table("portal_messages")
+            .update({
+                "target_date": target_date,
+                "message": message,
+                "updated_by": user_id,
+                "updated_at": "now()",
+            })
+            .eq("id", message_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"update_calendar_message failed: id={message_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="連絡事項の更新に失敗しました。")
+    return {"ok": True, "data": res.data}
+
+
+@router.delete("/calendar-messages/{message_id}")
+def delete_calendar_message(
+    message_id: str,
+    current_user: dict = Depends(require_admin_or_leader),
+):
+    try:
+        res = (
+            supabase
+            .table("portal_messages")
+            .delete()
+            .eq("id", message_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"delete_calendar_message failed: id={message_id} {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="連絡事項の削除に失敗しました。")
+    return {"ok": True, "data": res.data}
