@@ -20,6 +20,7 @@ from app.routers.admin_portal_home_override import router as admin_portal_home_o
 from app.routers.admin_portal_prep_list_override import router as admin_portal_prep_list_override_router
 from app.routers.admin_portal import router as admin_portal_router
 from app.routers.admin_portal_construction_proxy import router as admin_portal_construction_proxy_router
+from app.routers.admin_portal_calendar_summary import router as admin_portal_calendar_summary_router
 from app.routers.jinjer_sync_override import router as jinjer_sync_override_router
 from app.routers.jinjer_attendance_override import router as jinjer_attendance_override_router
 from app.routers.shift_upload_override import router as shift_upload_override_router
@@ -84,6 +85,7 @@ app.include_router(admin_portal_home_override_router)
 app.include_router(admin_portal_prep_list_override_router)
 app.include_router(admin_portal_router)
 app.include_router(admin_portal_construction_proxy_router)
+app.include_router(admin_portal_calendar_summary_router)
 app.include_router(jinjer_sync_override_router)
 app.include_router(jinjer_attendance_override_router)
 app.include_router(shift_upload_override_router)
