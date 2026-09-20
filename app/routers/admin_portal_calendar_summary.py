@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -19,6 +19,8 @@ EXCLUDED_CLEANING_STATUSES = {
     "Canceled",
 }
 
+PAGE_SIZE = 1000
+
 
 def _month_range(year: int, month: int) -> tuple[str, str]:
     start = date(year, month, 1)
@@ -33,6 +35,32 @@ def _date_key(value) -> str:
     return str(value or "")[:10]
 
 
+def _fetch_cleaning_tasks(start_date: str, end_date: str) -> list[dict]:
+    """Fetch every cleaning task in the month, beyond Supabase's 1000-row response limit."""
+    rows: list[dict] = []
+    offset = 0
+
+    while True:
+        res = (
+            supabase
+            .table("cleaning_tasks")
+            .select("id,task_date,status")
+            .gte("task_date", start_date)
+            .lt("task_date", end_date)
+            .order("task_date")
+            .range(offset, offset + PAGE_SIZE - 1)
+            .execute()
+        )
+        page = res.data or []
+        rows.extend(page)
+
+        if len(page) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+
+    return rows
+
+
 @router.get("/company-calendar-summary")
 def get_company_calendar_summary(
     year: int,
@@ -42,14 +70,7 @@ def get_company_calendar_summary(
     start_date, end_date = _month_range(year, month)
 
     try:
-        task_res = (
-            supabase
-            .table("cleaning_tasks")
-            .select("id,task_date,status")
-            .gte("task_date", start_date)
-            .lt("task_date", end_date)
-            .execute()
-        )
+        task_rows = _fetch_cleaning_tasks(start_date, end_date)
         message_res = (
             supabase
             .table("portal_messages")
@@ -68,7 +89,7 @@ def get_company_calendar_summary(
         raise HTTPException(status_code=500, detail="カレンダー集計の取得に失敗しました。")
 
     cleaning_counts: dict[str, int] = defaultdict(int)
-    for row in task_res.data or []:
+    for row in task_rows:
         status = str(row.get("status") or "")
         if status in EXCLUDED_CLEANING_STATUSES:
             continue
