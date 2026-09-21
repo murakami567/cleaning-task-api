@@ -116,11 +116,12 @@ def _fetch_staffs(target_date: str) -> list[dict[str, Any]]:
         .execute()
     )
     out: dict[str, dict[str, Any]] = {}
-    off_values = {"休み", "休日", "定休", "欠勤", "off", "OFF", "休"}
     for day in res.data or []:
         for entry in day.get("shift_entries") or []:
-            status = str(entry.get("status") or "出勤")
-            if status in off_values:
+            # 自動割当はシフト表で明示的に「出勤」のスタッフだけを対象にする。
+            # 有給・休み・欠勤・未設定・その他ステータスは対象外。
+            status = str(entry.get("status") or "").strip()
+            if status != "出勤":
                 continue
             staff = entry.get("staff_members") or {}
             sid = str(staff.get("id") or "")
