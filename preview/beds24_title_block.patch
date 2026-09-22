@@ -1,0 +1,108 @@
+*** PREVIEW PATCH — apply to app/services/beds24_service.py ***
+
+1) Add these helpers after append_sync_alert():
+
+
+def append_blocked_sync_alert(existing_note: str | None, title: str) -> str:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    alert = (
+        f"【Beds24同期 {timestamp}】\n"
+        "予約タイトルがブロック対象へ変更されたためCXL\n"
+        f"Title: {title}"
+    )
+    note = str(existing_note or "").strip()
+    # Re-running sync must not duplicate the same alert endlessly.
+    if note and "予約タイトルがブロック対象へ変更されたためCXL" in note and f"Title: {title}" in note:
+        return note
+    return f"{alert}\n\n{note}" if note else alert
+
+
+def cancel_existing_blocked_task(booking_id: str, title: str) -> dict:
+    """Do not create a task for a blocked Beds24 row. If the booking already
+    has cleaning_tasks records, keep assignments/checker/history and mark them CXL.
+    """
+    booking_id = str(booking_id or "").strip()
+    title = str(title or "").strip()
+    if not booking_id:
+        return {"matched": 0, "updated": 0, "task_ids": []}
+
+    res = (
+        supabase.table("cleaning_tasks")
+        .select("*")
+        .eq("booking_id", booking_id)
+        .execute()
+    )
+    rows = res.data or []
+    updated_ids = []
+
+    for row in rows:
+        row_id = row.get("id")
+        if not row_id:
+            continue
+        update_payload = {
+            "status": "CXL",
+            "beds24_title": title,
+            "note": append_blocked_sync_alert(row.get("note"), title),
+        }
+        supabase.table("cleaning_tasks").update(update_payload).eq("id", row_id).execute()
+        updated_ids.append(row_id)
+
+    return {"matched": len(rows), "updated": len(updated_ids), "task_ids": updated_ids}
+
+
+2) In beds24_csv_sync_service(), initialize this next to cleaning_saved/skipped:
+
+    blocked_cxl = []
+
+3) Replace the existing blocked-title section:
+
+            if "ブロック" in title or "予備部屋" in title:
+                skipped.append({"reason": "blocked", "row_index": i, "booking_id": ref_raw})
+                continue
+
+with:
+
+            title = str(title or "").strip()
+            if "ブロック" in title or "予備部屋" in title:
+                cxl_result = cancel_existing_blocked_task(ref_raw, title)
+                blocked_cxl.append({
+                    "booking_id": ref_raw,
+                    "title": title,
+                    "matched_count": cxl_result["matched"],
+                    "updated_count": cxl_result["updated"],
+                    "task_ids": cxl_result["task_ids"],
+                })
+                skipped.append({
+                    "reason": "blocked",
+                    "row_index": i,
+                    "booking_id": ref_raw,
+                    "title": title,
+                    "existing_task_cxl_count": cxl_result["updated"],
+                })
+                continue
+
+4) Add the title to records.append():
+
+                "beds24_title": title,
+
+5) Add it to final_records.append():
+
+                "beds24_title": rec["beds24_title"],
+
+6) Add these fields to BOTH return dictionaries (empty-CSV return and final return):
+
+            "blocked_cxl_count": 0,
+            "blocked_cxl": [],
+
+For the final non-empty return use:
+
+        "blocked_cxl_count": sum(x["updated_count"] for x in blocked_cxl),
+        "blocked_cxl": blocked_cxl,
+
+Behavior after patch:
+- Normal Beds24 reservation: cleaning_tasks.beds24_title is saved/updated.
+- Title containing ブロック or 予備部屋: no new cleaning task is generated.
+- If a cleaning task with the same booking_id already exists: status becomes CXL.
+- assigned staff, checker, task_date and other operational fields are not cleared.
+- existing note is preserved and a Beds24 CXL reason is prepended once.
+- repeated sync remains idempotent with respect to the note text.
