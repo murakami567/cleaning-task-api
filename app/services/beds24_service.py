@@ -38,6 +38,7 @@ OPERATIONAL_FIELDS = (
     "checker_name",
     "assignment_locked",
     "cleaning_started_at",
+    "requires_reassignment",
 )
 
 
@@ -305,7 +306,7 @@ def apply_carry_over_safety(payload: dict, existing: dict | None):
 
     - 持越先が新しい次チェックイン日以前なら、持越日・担当情報を維持する。
     - 持越先が新しい次チェックイン日より後なら、清掃日を次チェックイン日に戻し、
-      ステータスを未着手にして担当者・チェッカーを解除する。
+      ステータスを未着手にして担当者・チェッカーを解除し、要再割当フラグを立てる。
     """
     if not existing or str(existing.get("status") or "").strip() != CARRY_OVER_STATUS:
         return payload, None
@@ -342,6 +343,7 @@ def apply_carry_over_safety(payload: dict, existing: dict | None):
     payload["checker_name"] = None
     payload["assignment_locked"] = False
     payload["cleaning_started_at"] = None
+    payload["requires_reassignment"] = True
     payload["note"] = append_sync_alert(
         existing.get("note"), old_next_checkin, new_next_checkin, old_task_date
     )
@@ -506,30 +508,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 continue
 
             if "ブロック" in title or "予備部屋" in title:
-                # Beds24上で通常予約がブロック/予備部屋へ変更された場合、
-                # 既存の同一booking_idの清掃タスクだけをCXL化する。
-                # 新規のブロック/予備部屋はcleaning_tasksへ作成しない。
-                existing_res = (
-                    supabase.table("cleaning_tasks")
-                    .select("id,booking_id,status")
-                    .eq("booking_id", ref_raw)
-                    .execute()
-                )
-                existing_rows = existing_res.data or []
-                if existing_rows:
-                    for existing_row in existing_rows:
-                        supabase.table("cleaning_tasks").update({
-                            "status": "CXL",
-                            "beds24_title": str(title or "").strip(),
-                        }).eq("id", existing_row["id"]).execute()
-                    skipped.append({
-                        "reason": "blocked_existing_task_cancelled",
-                        "row_index": i,
-                        "booking_id": ref_raw,
-                        "updated_count": len(existing_rows),
-                    })
-                else:
-                    skipped.append({"reason": "blocked", "row_index": i, "booking_id": ref_raw})
+                skipped.append({"reason": "blocked", "row_index": i, "booking_id": ref_raw})
                 continue
 
             checkin_date = parse_beds24_date(first_night_raw)
@@ -557,13 +536,13 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
 
             records.append({
                 "booking_id": booking_id,
-                "beds24_title": str(title or "").strip(),
                 "property_name": property_name,
                 "room_name": room_name,
                 "room_key": room_key,
                 "checkin_date": checkin_date,
                 "checkout_date": checkout_date,
                 "guest_count": guest_count,
+                "beds24_title": title,
             })
 
         except Exception as e:
@@ -602,7 +581,6 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
 
             final_records.append({
                 "booking_id": rec["booking_id"],
-                "beds24_title": rec.get("beds24_title") or "",
                 "property_name": rec["property_name"],
                 "room_name": rec["room_name"],
                 "room_key": rec["room_key"],
@@ -617,6 +595,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 "status": "未着手",
                 "note": "",
                 "source": "beds24_csv",
+                "beds24_title": rec.get("beds24_title", ""),
             })
 
     # 4. room_key + checkout_date を正規キーとして保存し、既存重複を統合する。
