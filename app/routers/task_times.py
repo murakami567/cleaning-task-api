@@ -27,6 +27,7 @@ def update_task_with_times(
     checked_by_name: str | None = Body(None),
     early_checkin_time: str | None = Body(None),
     late_checkout_time: str | None = Body(None),
+    requires_reassignment: bool | None = Body(None),
     current_user: dict = Depends(require_task_write),
 ):
     """
@@ -39,6 +40,7 @@ def update_task_with_times(
     - チェック完了: checked_at を記録
     - checklist が送られてきた場合は cleaning_tasks.checklist に保存
     - early_checkin_time / late_checkout_time は部屋別の当日対応時刻として保存
+    - requires_reassignment は持越自動解除後の要再割当表示に使用
     """
     payload = {}
     now = datetime.now(timezone.utc).isoformat()
@@ -76,6 +78,8 @@ def update_task_with_times(
     if assigned_staff_ids is not None:
         payload["assigned_staff_ids"] = assigned_staff_ids
         payload["assigned_staff_id"] = assigned_staff_ids[0] if len(assigned_staff_ids) > 0 else None
+        if len(assigned_staff_ids) > 0:
+            payload["requires_reassignment"] = False
 
     if assigned_staff_names is not None:
         payload["assigned_staff_names"] = assigned_staff_names
@@ -83,6 +87,8 @@ def update_task_with_times(
 
     if assigned_staff_id is not None:
         payload["assigned_staff_id"] = assigned_staff_id
+        if assigned_staff_id:
+            payload["requires_reassignment"] = False
 
     if assigned_staff_name is not None:
         payload["assigned_staff_name"] = assigned_staff_name
@@ -98,6 +104,9 @@ def update_task_with_times(
 
     if late_checkout_time is not None:
         payload["late_checkout_time"] = late_checkout_time or None
+
+    if requires_reassignment is not None:
+        payload["requires_reassignment"] = requires_reassignment
 
     if not payload:
         raise HTTPException(status_code=400, detail="no update fields")
