@@ -506,7 +506,30 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
                 continue
 
             if "ブロック" in title or "予備部屋" in title:
-                skipped.append({"reason": "blocked", "row_index": i, "booking_id": ref_raw})
+                # Beds24上で通常予約がブロック/予備部屋へ変更された場合、
+                # 既存の同一booking_idの清掃タスクだけをCXL化する。
+                # 新規のブロック/予備部屋はcleaning_tasksへ作成しない。
+                existing_res = (
+                    supabase.table("cleaning_tasks")
+                    .select("id,booking_id,status")
+                    .eq("booking_id", ref_raw)
+                    .execute()
+                )
+                existing_rows = existing_res.data or []
+                if existing_rows:
+                    for existing_row in existing_rows:
+                        supabase.table("cleaning_tasks").update({
+                            "status": "CXL",
+                            "beds24_title": str(title or "").strip(),
+                        }).eq("id", existing_row["id"]).execute()
+                    skipped.append({
+                        "reason": "blocked_existing_task_cancelled",
+                        "row_index": i,
+                        "booking_id": ref_raw,
+                        "updated_count": len(existing_rows),
+                    })
+                else:
+                    skipped.append({"reason": "blocked", "row_index": i, "booking_id": ref_raw})
                 continue
 
             checkin_date = parse_beds24_date(first_night_raw)
@@ -534,6 +557,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
 
             records.append({
                 "booking_id": booking_id,
+                "beds24_title": str(title or "").strip(),
                 "property_name": property_name,
                 "room_name": room_name,
                 "room_key": room_key,
@@ -578,6 +602,7 @@ def beds24_csv_sync_service(from_date: str | None = None, to_date: str | None = 
 
             final_records.append({
                 "booking_id": rec["booking_id"],
+                "beds24_title": rec.get("beds24_title") or "",
                 "property_name": rec["property_name"],
                 "room_name": rec["room_name"],
                 "room_key": rec["room_key"],
